@@ -1,18 +1,22 @@
 # Reunião Local
 
-Grava reuniões presenciais, transcreve-as e gera um resumo com os pontos principais,
-as decisões e as tarefas. Corre **toda no seu computador**: é gratuita, funciona sem
-internet depois de instalada e o áudio nunca sai da máquina.
+Grava reuniões — presenciais ou online (Meet, Teams, Zoom…) — ou processa um áudio que já
+existe, como uma mensagem de voz do WhatsApp, e gera a transcrição e um resumo com os pontos
+principais, as decisões e as tarefas. Corre **toda no seu computador**: é gratuita, funciona
+sem internet depois de instalada e o áudio nunca sai da máquina.
 
-| Etapa       | Ferramenta                                  |
-|-------------|---------------------------------------------|
-| Gravação    | `sounddevice` (microfone do portátil ou USB) |
-| Transcrição | `faster-whisper`, modelo `large-v3-turbo` na GPU |
-| Resumo      | Ollama (em Docker) com o modelo `qwen3:8b`  |
+| Etapa       | Ferramenta                                                     |
+|-------------|----------------------------------------------------------------|
+| Gravação    | `sounddevice` + PulseAudio (microfone e, no modo online, o som do sistema) |
+| Conversão   | `ffmpeg` (para ficheiros: opus, mp3, wav, m4a, vídeo…)        |
+| Transcrição | `faster-whisper`, modelo `large-v3-turbo` na GPU              |
+| Resumo      | Ollama (em Docker) com o modelo `qwen3:8b`                    |
+| Interface   | GTK 3 (segue o tema do sistema)                               |
 
 ## Instalação (uma vez)
 
-Requer o Docker instalado e acessível sem `sudo` (utilizador no grupo `docker`).
+Requer Ubuntu, Zorin OS ou Debian, e o Docker instalado e acessível sem `sudo`
+(utilizador no grupo `docker`).
 
 ```bash
 cd meet-ai
@@ -20,56 +24,88 @@ chmod +x instalar.sh
 ./instalar.sh
 ```
 
-O Ollama corre no contentor `reuniao-ollama` (ver `docker-compose.yml`) e não é
-instalado na máquina. Com GPU NVIDIA, o instalador instala também o
-`nvidia-container-toolkit` para o contentor usar a GPU.
+O instalador:
+
+- instala os pacotes do sistema (`ffmpeg`, PortAudio, GTK para Python);
+- cria o ambiente Python em `.venv`;
+- com GPU NVIDIA, instala as bibliotecas CUDA do Whisper e o `nvidia-container-toolkit`,
+  para o Ollama usar a GPU dentro do Docker;
+- arranca o Ollama no contentor `reuniao-ollama` e descarrega o modelo `qwen3:8b`;
+- cria o comando `reuniao` em `~/.local/bin` e o atalho **Reunião Local** no menu de aplicações.
 
 Na primeira transcrição, o modelo Whisper (~1,6 GB) é descarregado automaticamente.
 
-## Uso
-
-### Interface gráfica
+## Interface gráfica
 
 ```bash
 reuniao            # ou "Reunião Local" no menu de aplicações
 ```
 
-Abre uma janela onde se escolhe o **título**, o **modo** (ao vivo = só microfone;
-online = microfone + som do sistema, para Meet, Teams, Zoom…), o **microfone** e se a
-transcrição usa a **GPU**. Um botão inicia e termina a gravação; a transcrição e o resumo
-seguem automaticamente e aparecem na própria janela, com um botão para abrir a pasta.
+### Gravar uma reunião
+
+1. Escreva um **título** (opcional, é usado no nome da pasta).
+2. Escolha o **modo**:
+   - **Ao vivo** — grava só o microfone. Para reuniões presenciais.
+   - **Online** — grava o microfone e o som do sistema, ou seja, os outros participantes.
+     Entre na reunião no browser como habitualmente; ver [Reuniões online](#reuniões-online).
+3. Escolha o **microfone** (aparecem com os mesmos nomes das Definições de som) e se a
+   transcrição usa a **GPU**.
+4. Carregue em **Iniciar gravação** e, no fim, em **Terminar reunião**.
+
+### Processar um ficheiro de áudio
+
 Para um áudio que já existe — uma mensagem de voz do WhatsApp (`.opus`), um `.mp3`, `.wav`,
-`.m4a` ou até um vídeo — use **Processar um ficheiro de áudio…** por baixo do botão de gravar,
-ou arraste o ficheiro para a janela. Segue o mesmo processo: transcrição e resumo.
+`.m4a` ou até um vídeo — use **Processar um ficheiro de áudio…**, por baixo do botão de
+gravar, ou **arraste o ficheiro para a janela**. Passa pelo mesmo processo: transcrição e resumo.
+
+### Resultado
+
+Durante o processamento, a barra de título mostra a etapa atual (*A transcrever…*,
+*A gerar o resumo…*) e o painel mostra o progresso. No fim, o painel mostra o **resumo** e
+aparecem os botões:
+
+| Botão | O que faz |
+|-------|-----------|
+| **Resumo** | mostra o `resumo.md` no painel |
+| **Transcrição** | mostra o `transcricao.txt` no painel, com os tempos |
+| **Copiar** | copia para a área de transferência o texto que está no painel |
+| **Áudio** | abre a gravação no leitor de áudio do sistema |
+
+O ícone de pasta na barra de título abre a pasta da reunião. Se algo falhar, o painel
+mantém o registo, para se perceber o que aconteceu, e os ficheiros já gerados continuam
+acessíveis.
 
 Quando o resumo fica pronto com a janela em segundo plano, aparece uma notificação do sistema.
-As escolhas ficam guardadas em `~/.config/reuniao/interface.json`.
+As escolhas (modo, microfone, GPU) ficam guardadas em `~/.config/reuniao/interface.json`.
 
-A janela é feita em GTK 3, por isso segue o tema, a fonte, os ícones e o modo claro/escuro do
-ambiente de trabalho. Os microfones aparecem com os mesmos nomes das Definições de som, e o
-microfone escolhido também é usado no modo online.
+A janela é só uma frente para os comandos abaixo: tudo o que faz também se faz no terminal.
 
-A janela é só uma frente para os comandos abaixo — tudo o que faz também se faz no terminal.
-
-### Linha de comandos
+## Linha de comandos
 
 ```bash
 reuniao gravar --titulo "Reunião com cliente"   # Ctrl+C para terminar
 reuniao gravar --meet --titulo "Daily"          # reunião online (Meet, Teams, Zoom…)
-reuniao processar ~/Downloads/audio.m4a         # áudio que já existe (WhatsApp, telemóvel…)
+reuniao processar ~/Downloads/audio.opus        # áudio que já existe (WhatsApp, telemóvel…)
 reuniao resumir ~/Reunioes/<pasta>/transcricao.txt   # refaz só o resumo
 reuniao microfones                              # lista os microfones
 reuniao gravar --dispositivo 3                  # usa um microfone específico
+reuniao                                         # abre a interface gráfica
 ```
 
-Cada reunião fica numa pasta própria dentro de `~/Reunioes/AAAA-MM-DD_HHMM_titulo/`:
+O `--dispositivo` aceita o número mostrado por `reuniao microfones` ou o nome de uma fonte
+do PulseAudio (`pactl list short sources`).
 
-- `audio.wav` — a gravação (é gravada no disco à medida que decorre, por isso não se perde se algo falhar)
-- `transcricao.txt` — o texto, com os tempos
-- `transcricao.json` — os segmentos, para usar noutras ferramentas
-- `resumo.md` — resumo, pontos principais, decisões, tarefas e questões em aberto
+### Ficheiros gerados
 
-## Opções úteis
+Cada reunião fica numa pasta própria em `~/Reunioes/AAAA-MM-DD_HHMM_titulo/`:
+
+- `audio.wav` — a gravação, em WAV 16 kHz mono. É escrita no disco à medida que decorre,
+  por isso não se perde se algo falhar.
+- `transcricao.txt` — o texto, com os tempos.
+- `transcricao.json` — os segmentos, para usar noutras ferramentas.
+- `resumo.md` — resumo, pontos principais, decisões, tarefas e questões em aberto.
+
+### Opções úteis
 
 | Opção | Para quê |
 |-------|----------|
@@ -78,35 +114,65 @@ Cada reunião fica numa pasta própria dentro de `~/Reunioes/AAAA-MM-DD_HHMM_tit
 | `--cpu` | não usar a GPU |
 | `--idioma en` | reuniões noutra língua |
 | `--sem-resumo` | só gravar e transcrever |
+| `--saida <pasta>` | guardar as reuniões noutra pasta |
 
-Os valores por defeito estão no topo de `reuniao.py`.
+As opções podem vir antes ou depois do comando (`reuniao --cpu gravar` ou
+`reuniao gravar --cpu`). Os valores por defeito estão no topo de `reuniao.py`.
 
-### Reuniões online (`--meet`)
+## Reuniões online
 
-Com `--meet`, além do microfone grava-se também o som que sai nas colunas/auscultadores —
-ou seja, os outros participantes. Funciona com qualquer aplicação (Meet, Teams, Zoom, Discord…):
-basta entrar na reunião no browser como habitualmente e correr o comando nesta máquina.
-A app não entra na reunião nem aparece como participante; tal como com um gravador numa mesa,
-convém avisar os presentes de que a reunião está a ser gravada.
+No modo online (`--meet` no terminal), além do microfone grava-se também o som que sai nas
+colunas ou nos auscultadores, ou seja, os outros participantes. Funciona com qualquer
+aplicação (Meet, Teams, Zoom, Discord…): basta entrar na reunião como habitualmente, nesta
+máquina, e começar a gravar.
+
+A app **não entra na reunião** nem aparece como participante. Tal como com um gravador numa
+mesa, convém avisar os presentes de que a reunião está a ser gravada.
 
 Tecnicamente, cria-se um sink virtual no PulseAudio (`pactl`) que mistura a saída de som com o
-microfone; é removido automaticamente ao terminar. Requer `pulseaudio-utils`.
+microfone; é removido automaticamente ao terminar. Com colunas em vez de auscultadores, o
+microfone também apanha o som dos outros, o que pode duplicar algumas frases na transcrição.
 
 ## Desempenho esperado (RTX 4060, 8 GB)
 
 - Transcrição: uma reunião de 1 hora demora aproximadamente 2 a 4 minutos.
-- Resumo: entre 30 segundos e 2 minutos. As reuniões longas são divididas em partes e o resumo final junta-as.
-- O Whisper e o Ollama usam a GPU um de cada vez, por isso os 8 GB de VRAM chegam.
+- Resumo: entre 30 segundos e 2 minutos. As reuniões longas são divididas em partes e o
+  resumo final junta-as.
+- O Whisper e o Ollama usam a GPU um de cada vez: o Whisper é libertado antes do resumo e o
+  Ollama descarrega o modelo logo a seguir, por isso os 8 GB de VRAM chegam.
 
 ## Problemas comuns
 
-- **"GPU indisponível… A usar CPU"**: corra sempre pelo atalho `reuniao`, porque é ele que configura as bibliotecas CUDA. Confirme também que `nvidia-smi` funciona.
-- **"O Ollama não está a correr"**: o atalho `reuniao` arranca o contentor sozinho; se falhar, corra `docker compose up -d` na pasta do projeto e veja `docker logs reuniao-ollama`.
-- **Resumo muito lento**: o Ollama pode estar sem GPU. Confirme com `docker exec reuniao-ollama nvidia-smi` e que o `.env` inclui `docker-compose.gpu.yml`.
-- **A gravação fica em silêncio**: corra `reuniao microfones`, escolha o microfone certo com `--dispositivo N` e verifique o volume de entrada nas definições de som.
-- **Qualidade do áudio**: pouse o portátil no centro da mesa. Um microfone USB omnidirecional barato melhora muito o resultado.
+- **"GPU indisponível… A usar CPU"**: corra sempre pelo atalho `reuniao`, porque é ele que
+  configura as bibliotecas CUDA. Confirme também que `nvidia-smi` funciona. Se o erro for
+  *out of memory*, outro programa está a ocupar a VRAM; veja com `nvidia-smi`.
+- **"O Ollama não está a correr"**: o atalho `reuniao` arranca o contentor sozinho; se falhar,
+  corra `docker compose up -d` na pasta do projeto e veja `docker logs reuniao-ollama`.
+- **Resumo muito lento**: o Ollama pode estar sem GPU. Confirme com
+  `docker exec reuniao-ollama nvidia-smi` e que o `.env` inclui `docker-compose.gpu.yml`.
+- **A janela não abre**: confirme que o GTK para Python está instalado
+  (`sudo apt install python3-gi gir1.2-gtk-3.0`).
+- **A gravação fica em silêncio**: escolha outro microfone (na janela, ou com
+  `reuniao microfones` e `--dispositivo`) e verifique o volume de entrada nas definições de som.
+- **"Não foi possível ler o áudio"**: o ficheiro não é um áudio válido ou está corrompido.
+- **Aviso sobre `HF_TOKEN`**: é só um aviso do Hugging Face ao verificar o modelo Whisper; pode
+  ser ignorado.
+- **Qualidade do áudio**: pouse o portátil no centro da mesa. Um microfone USB omnidirecional
+  barato melhora muito o resultado.
+
+## Estrutura do projeto
+
+| Ficheiro | Para quê |
+|----------|----------|
+| `reuniao.py` | gravação, conversão, transcrição, resumo e linha de comandos |
+| `interface.py` | janela GTK; lança o `reuniao.py` e mostra o resultado |
+| `reuniao` | atalho que prepara as bibliotecas CUDA, arranca o Ollama e chama o `reuniao.py` (gerado pelo instalador) |
+| `reuniao.desktop` | modelo do atalho no menu de aplicações |
+| `instalar.sh` | instalação completa |
+| `docker-compose.yml`, `docker-compose.gpu.yml` | contentor do Ollama, com e sem GPU |
 
 ## Ideias para evoluir
 
-- **Identificar quem fala** (diarização): `pyannote.audio` é gratuito, mas o modelo exige aceitar os termos no Hugging Face.
+- **Identificar quem fala** (diarização): `pyannote.audio` é gratuito, mas o modelo exige
+  aceitar os termos no Hugging Face.
 - **Notas importantes**: carregar numa tecla durante a gravação para marcar o momento.
