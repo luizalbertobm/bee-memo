@@ -4,6 +4,7 @@ Reunião Local — grava uma reunião presencial, transcreve e gera um resumo.
 100% local e gratuito: faster-whisper (transcrição) + Ollama (resumo).
 
 Uso:
+  python reuniao.py                        # abre a interface gráfica
   python reuniao.py gravar                 # grava até carregar Ctrl+C, depois transcreve e resume
   python reuniao.py gravar --meet          # reunião online: grava o microfone e o som do sistema
   python reuniao.py processar audio.m4a    # processa um áudio que já existe
@@ -345,8 +346,9 @@ def main():
     opcoes(parser, lambda v: v)
     comum = argparse.ArgumentParser(add_help=False)
     opcoes(comum, lambda v: argparse.SUPPRESS)
-    sub = parser.add_subparsers(dest="comando", required=True)
+    sub = parser.add_subparsers(dest="comando")    # sem subcomando → interface gráfica
 
+    sub.add_parser("gui", help="abre a interface gráfica (o mesmo que correr sem argumentos)")
     g = sub.add_parser("gravar", parents=[comum], help="grava uma reunião nova")
     g.add_argument("--dispositivo", help="número ou nome do microfone (ver 'microfones')")
     g.add_argument("--meet", action="store_true",
@@ -359,7 +361,10 @@ def main():
     sub.add_parser("microfones", help="lista os dispositivos de áudio")
     args = parser.parse_args()
 
-    if args.comando == "microfones":
+    if args.comando in (None, "gui"):
+        import interface                           # só aqui, para o CLI não carregar o Tk
+        interface.main()
+    elif args.comando == "microfones":
         listar_dispositivos()
     elif args.comando == "gravar":
         pasta = nova_pasta(args.saida, args.titulo)

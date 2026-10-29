@@ -13,7 +13,7 @@ fi
 
 echo "==> Pacotes do sistema (ffmpeg, PortAudio, venv)"
 sudo apt update
-sudo apt install -y ffmpeg libportaudio2 python3-venv python3-pip curl
+sudo apt install -y ffmpeg libportaudio2 python3-venv python3-pip python3-tk curl
 
 echo "==> Ambiente Python"
 python3 -m venv .venv
@@ -78,6 +78,11 @@ exec "$DIR/.venv/bin/python" "$DIR/reuniao.py" "$@"
 EOF
 chmod +x reuniao reuniao.py
 mkdir -p ~/.local/bin && ln -sf "$PWD/reuniao" ~/.local/bin/reuniao
+
+# Atalho no menu de aplicações (abre a interface gráfica)
+mkdir -p ~/.local/share/applications
+sed "s#@HOME@#$HOME#" reuniao.desktop > ~/.local/share/applications/reuniao.desktop
+command -v update-desktop-database >/dev/null && update-desktop-database ~/.local/share/applications
 
 echo
 echo "✅ Instalado. Experimente:  reuniao gravar --titulo \"Teste\""

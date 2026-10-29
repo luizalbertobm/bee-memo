@@ -28,6 +28,22 @@ Na primeira transcrição, o modelo Whisper (~1,6 GB) é descarregado automatica
 
 ## Uso
 
+### Interface gráfica
+
+```bash
+reuniao            # ou "Reunião Local" no menu de aplicações
+```
+
+Abre uma janela onde se escolhe o **título**, o **modo** (ao vivo = só microfone;
+online = microfone + som do sistema, para Meet, Teams, Zoom…), o **microfone** e se a
+transcrição usa a **GPU**. Um botão inicia e termina a gravação; a transcrição e o resumo
+seguem automaticamente e aparecem na própria janela, com um botão para abrir a pasta.
+As escolhas ficam guardadas em `~/.config/reuniao/interface.json`.
+
+A janela é só uma frente para os comandos abaixo — tudo o que faz também se faz no terminal.
+
+### Linha de comandos
+
 ```bash
 reuniao gravar --titulo "Reunião com cliente"   # Ctrl+C para terminar
 reuniao gravar --meet --titulo "Daily"          # reunião online (Meet, Teams, Zoom…)
@@ -84,5 +100,4 @@ microfone; é removido automaticamente ao terminar. Requer `pulseaudio-utils`.
 ## Ideias para evoluir
 
 - **Identificar quem fala** (diarização): `pyannote.audio` é gratuito, mas o modelo exige aceitar os termos no Hugging Face.
-- **Interface gráfica** com um botão de gravar/parar (Tkinter, ou uma página web local com FastAPI).
 - **Notas importantes**: carregar numa tecla durante a gravação para marcar o momento.

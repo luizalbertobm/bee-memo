@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Reunião Local
+Comment=Grava, transcreve e resume reuniões — 100% local
+Exec=@HOME@/.local/bin/reuniao
+Icon=audio-input-microphone
+Terminal=false
+Categories=AudioVideo;Audio;
+Keywords=reunião;gravar;transcrição;resumo;meet;
