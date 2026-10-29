@@ -1,0 +1,14 @@
+# Ollama (modelos de linguagem locais) num contentor — não é preciso instalá-lo na máquina.
+# Com GPU NVIDIA, o instalar.sh junta também o docker-compose.gpu.yml (via .env).
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: reuniao-ollama
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:11434:11434"
+    volumes:
+      - ollama:/root/.ollama
+
+volumes:
+  ollama:

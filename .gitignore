@@ -1,0 +1,10 @@
+# Ambiente Python
+.venv/
+__pycache__/
+*.pyc
+
+# Gerado pelo instalar.sh (depende da máquina: com ou sem GPU)
+.env
+
+# Definições locais do Claude Code
+.claude/settings.local.json

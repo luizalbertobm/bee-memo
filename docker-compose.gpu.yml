@@ -1,0 +1,10 @@
+# Dá acesso à GPU NVIDIA ao Ollama (requer o nvidia-container-toolkit).
+services:
+  ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
