@@ -145,14 +145,11 @@ class Janela(Gtk.ApplicationWindow):
             self.oradores)[0])
         # 0 = automático. Não fica nas preferências: depende de cada reunião.
         self.pessoas = Gtk.SpinButton.new_with_range(0, 20, 1)
-        self.pessoas.set_editable(False)           # muda-se com − / +; o texto é "Automático"
-        self.pessoas.set_numeric(False)            # em modo numérico o GTK recusa esse texto
-        self.pessoas.set_width_chars(10)
-        self.pessoas.connect("output", self.mostrar_pessoas)
-        self.pessoas.update()
+        self.pessoas.set_numeric(True)             # só aceita algarismos
+        self.pessoas.set_width_chars(4)
         lista.add(linha_de_preferencias(
-            "Número de pessoas", "Se souberes quantas são, a separação das vozes melhora",
-            self.pessoas)[0])
+            "Número de pessoas", "0 = deteção automática. Se souberes quantas são, "
+            "a separação das vozes melhora", self.pessoas)[0])
         self.oradores.connect("notify::active", lambda *_: self.pessoas.set_sensitive(
             self.oradores.get_active()))
         self.pessoas.set_sensitive(self.oradores.get_active())
@@ -308,12 +305,6 @@ class Janela(Gtk.ApplicationWindow):
             self.pessoas.set_sensitive(self.oradores.get_active())
 
     # ------------------------------------------------------------- subprocesso
-    @staticmethod
-    def mostrar_pessoas(botao: Gtk.SpinButton) -> bool:
-        valor = botao.get_value_as_int()
-        botao.set_text(str(valor) if valor else "Automático")
-        return True                                # True = o texto já foi definido
-
     def opcoes_comuns(self) -> list[str]:
         """Opções que valem tanto para gravar como para processar um ficheiro."""
         args = []
@@ -321,6 +312,8 @@ class Janela(Gtk.ApplicationWindow):
             args += ["--titulo", self.titulo.get_text().strip()]
         if not self.gpu.get_active():
             args.append("--cpu")
+        # Um número escrito só conta depois de Enter ou de sair do campo; update() aplica-o já.
+        self.pessoas.update()
         if not self.oradores.get_active():
             args.append("--sem-oradores")
         elif self.pessoas.get_value_as_int():

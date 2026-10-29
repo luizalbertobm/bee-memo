@@ -55,7 +55,7 @@ reuniao            # ou "Reunião Local" no menu de aplicações
    transcrição usa a **GPU**.
 4. **Identificar quem fala** vem ligado: a transcrição distingue as vozes (Pessoa 1, 2…).
    Se souber quantas pessoas vão falar, indique-o em **Número de pessoas** — a separação
-   fica mais fiável. Ver [Quem fala](#quem-fala).
+   fica mais fiável; com **0** o número é detetado automaticamente. Ver [Quem fala](#quem-fala).
 5. Carregue em **Iniciar gravação** e, no fim, em **Terminar reunião**.
 
 ### Processar um ficheiro de áudio
