@@ -133,8 +133,16 @@ def para_wav(origem: Path, destino: Path) -> Path:
     """Converte qualquer áudio/vídeo (m4a, mp3, ogg, mp4...) para WAV 16 kHz mono."""
     if not shutil.which("ffmpeg"):
         sys.exit("Erro: o ffmpeg não está instalado (sudo apt install ffmpeg).")
-    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", str(origem),
-                    "-ar", str(TAXA_AMOSTRAGEM), "-ac", "1", str(destino)], check=True)
+    resultado = subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", str(origem),
+                                "-vn", "-ar", str(TAXA_AMOSTRAGEM), "-ac", "1", str(destino)],
+                               capture_output=True, text=True)
+    if resultado.returncode != 0:
+        motivo = (resultado.stderr.strip().splitlines() or ["formato desconhecido"])[-1]
+        motivo = motivo.removeprefix(f"{origem}: ")     # o ffmpeg repete o caminho
+        destino.unlink(missing_ok=True)
+        with contextlib.suppress(OSError):
+            destino.parent.rmdir()                       # não deixa uma pasta vazia
+        sys.exit(f"Erro: não foi possível ler o áudio '{origem.name}' ({motivo}).")
     return destino
 
 
@@ -394,6 +402,7 @@ def main():
         if not args.audio.exists():
             sys.exit(f"Erro: ficheiro não encontrado: {args.audio}")
         pasta = nova_pasta(args.saida, args.titulo or args.audio.stem)
+        print(f"🎧 A converter {args.audio.name} para {pasta / 'audio.wav'}")
         wav = para_wav(args.audio, pasta / "audio.wav")
         processar_audio(wav, pasta, args)
     elif args.comando == "resumir":

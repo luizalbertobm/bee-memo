@@ -38,6 +38,10 @@ Abre uma janela onde se escolhe o **título**, o **modo** (ao vivo = só microfo
 online = microfone + som do sistema, para Meet, Teams, Zoom…), o **microfone** e se a
 transcrição usa a **GPU**. Um botão inicia e termina a gravação; a transcrição e o resumo
 seguem automaticamente e aparecem na própria janela, com um botão para abrir a pasta.
+Para um áudio que já existe — uma mensagem de voz do WhatsApp (`.opus`), um `.mp3`, `.wav`,
+`.m4a` ou até um vídeo — use **Processar um ficheiro de áudio…** por baixo do botão de gravar,
+ou arraste o ficheiro para a janela. Segue o mesmo processo: transcrição e resumo.
+
 Quando o resumo fica pronto com a janela em segundo plano, aparece uma notificação do sistema.
 As escolhas ficam guardadas em `~/.config/reuniao/interface.json`.
 

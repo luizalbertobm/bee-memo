@@ -21,7 +21,7 @@ import gi
 
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
-from gi.repository import Gdk, GLib, Gtk, Pango  # noqa: E402
+from gi.repository import Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
 
 PASTA = Path(__file__).resolve().parent
 # O atalho `reuniao` configura as bibliotecas CUDA e arranca o Ollama; se existir, usamo-lo.
@@ -152,7 +152,24 @@ class Janela(Gtk.ApplicationWindow):
         self.botao.add(conteudo)
         self.botao.connect("clicked", lambda *_: self.alternar())
         self.definir_botao("iniciar")
-        corpo.pack_start(self.botao, False, False, 0)
+
+        # Alternativa à gravação: processar um áudio que já existe (WhatsApp, mp3, wav…).
+        # Também se pode arrastar o ficheiro para a janela.
+        self.botao_ficheiro = Gtk.Button(label="Processar um ficheiro de áudio…",
+                                         always_show_image=True, halign=Gtk.Align.CENTER,
+                                         relief=Gtk.ReliefStyle.NONE,
+                                         tooltip_text="Ou arrasta o ficheiro para esta janela")
+        self.botao_ficheiro.set_image(Gtk.Image.new_from_icon_name(
+            "document-open-symbolic", Gtk.IconSize.BUTTON))
+        self.botao_ficheiro.connect("clicked", lambda *_: self.escolher_audio())
+        acoes = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        acoes.pack_start(self.botao, False, False, 0)
+        acoes.pack_start(self.botao_ficheiro, False, False, 0)
+        corpo.pack_start(acoes, False, False, 0)
+
+        self.drag_dest_set(Gtk.DestDefaults.ALL, [], Gdk.DragAction.COPY)
+        self.drag_dest_add_uri_targets()
+        self.connect("drag-data-received", self.ao_largar)
 
         self.estado = Gtk.Label(label="", xalign=0.5, wrap=True, justify=Gtk.Justification.CENTER,
                                 no_show_all=True)
@@ -197,10 +214,10 @@ class Janela(Gtk.ApplicationWindow):
         self.texto = Gtk.TextView(editable=False, cursor_visible=False, monospace=True,
                                   wrap_mode=Gtk.WrapMode.WORD_CHAR, left_margin=10,
                                   right_margin=10, top_margin=8, bottom_margin=8)
-        rolagem = Gtk.ScrolledWindow(vexpand=True, min_content_height=160)
-        rolagem.add(self.texto)
+        self.rolagem = Gtk.ScrolledWindow(vexpand=True, min_content_height=160)
+        self.rolagem.add(self.texto)
         moldura_texto = Gtk.Frame()
-        moldura_texto.add(rolagem)
+        moldura_texto.add(self.rolagem)
         corpo.pack_start(moldura_texto, True, True, 0)
 
         self.add(corpo)
@@ -264,7 +281,8 @@ class Janela(Gtk.ApplicationWindow):
         self.texto.scroll_to_mark(buffer.get_insert(), 0, False, 0, 1)
 
     def bloquear_opcoes(self, bloquear: bool):
-        for w in (self.titulo, self.radio_vivo, self.radio_online, self.combo_mic, self.gpu):
+        for w in (self.titulo, self.radio_vivo, self.radio_online, self.combo_mic, self.gpu,
+                  self.botao_ficheiro):
             w.set_sensitive(not bloquear)
 
     # ------------------------------------------------------------- subprocesso
@@ -283,11 +301,58 @@ class Janela(Gtk.ApplicationWindow):
 
     def alternar(self):
         if self.proc is None:
-            self.iniciar()
+            self.iniciar(self.argumentos())
         else:
             self.terminar()
 
-    def iniciar(self):
+    def escolher_audio(self):
+        """Seletor de ficheiros do sistema, filtrado para áudio (e vídeo, de que se extrai o som)."""
+        dialogo = Gtk.FileChooserNative(title="Escolher um ficheiro de áudio", transient_for=self,
+                                        action=Gtk.FileChooserAction.OPEN,
+                                        accept_label="_Processar", modal=True)
+        audio = Gtk.FileFilter()
+        audio.set_name("Áudio (WhatsApp, mp3, wav, m4a…)")
+        audio.add_mime_type("audio/*")
+        audio.add_mime_type("video/*")
+        for extensao in ("opus", "ogg", "oga", "mp3", "wav", "m4a", "aac", "flac", "wma",
+                         "webm", "mp4"):
+            audio.add_pattern(f"*.{extensao}")
+            audio.add_pattern(f"*.{extensao.upper()}")
+        dialogo.add_filter(audio)
+        todos = Gtk.FileFilter()
+        todos.set_name("Todos os ficheiros")
+        todos.add_pattern("*")
+        dialogo.add_filter(todos)
+        transferencias = Path(GLib.get_user_special_dir(GLib.UserDirectory.DIRECTORY_DOWNLOAD)
+                              or Path.home())
+        if transferencias.is_dir():
+            dialogo.set_current_folder(str(transferencias))
+        # Sem caminho local (por ex. um ficheiro numa localização de rede) não há o que fazer.
+        caminho = dialogo.get_filename() if dialogo.run() == Gtk.ResponseType.ACCEPT else None
+        dialogo.destroy()
+        if caminho:
+            self.processar(Path(caminho))
+
+    def ao_largar(self, _janela, _contexto, _x, _y, dados, _info, _tempo):
+        if self.proc is not None:
+            return
+        for uri in dados.get_uris() or []:
+            caminho = Gio.File.new_for_uri(uri).get_path()
+            if caminho and Path(caminho).is_file():
+                self.processar(Path(caminho))
+                return
+
+    def processar(self, audio: Path):
+        args = COMANDO + ["processar", str(audio)]
+        if self.titulo.get_text().strip():
+            args += ["--titulo", self.titulo.get_text().strip()]
+        if not self.gpu.get_active():
+            args.append("--cpu")
+        self.iniciar(args)
+        # Não há gravação a decorrer: ao fechar a janela pergunta-se só pelo processamento.
+        self.gravacao_fechada = True
+
+    def iniciar(self, argumentos: list[str]):
         self.guardar_preferencias()
         self.pasta, self.erro, self.gravacao_fechada = None, "", False
         self.resultados.hide()
@@ -300,12 +365,12 @@ class Janela(Gtk.ApplicationWindow):
             # Em bytes: em modo texto o Python converteria os \r em \n, e é pelos \r
             # que se distinguem as linhas que se atualizam no lugar (cronómetro, %).
             self.proc = subprocess.Popen(
-                self.argumentos(), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                argumentos, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 bufsize=0, cwd=PASTA,
                 # sem isto o Python filho guarda os prints num buffer até sair
                 env={**os.environ, "PYTHONUNBUFFERED": "1"})
         except OSError as erro:
-            self.mensagem(Gtk.MessageType.ERROR, "Não foi possível iniciar a gravação",
+            self.mensagem(Gtk.MessageType.ERROR, "Não foi possível iniciar",
                           str(erro))
             self.proc = None
             return
@@ -356,10 +421,19 @@ class Janela(Gtk.ApplicationWindow):
             self.inicio, self.a_gravar = time.time(), True
             self.definir_botao("parar")
             self.definir_estado("A gravar", "Carrega em Terminar quando a reunião acabar.")
+        elif linha.startswith("🎧"):
+            # "🎧 A converter <ficheiro> para <pasta>/audio.wav" — o nome do ficheiro pode
+            # conter " para ", por isso parte-se pela última ocorrência
+            self.pasta = str(Path(linha.rsplit(" para ", 1)[1].strip()).parent)
+            self.definir_botao("ocupado")
+            self.definir_estado("A converter o áudio…")
         elif linha.startswith("✅"):
             self.gravacao_fechada, self.a_gravar = True, False
             self.definir_botao("ocupado")
             self.definir_estado("A transcrever…")
+        elif linha.startswith("📝"):
+            if self.barra.get_subtitle() != "A transcrever no CPU…":   # mantém o aviso da GPU
+                self.definir_estado("A transcrever…")
         elif linha.startswith("🤖"):
             self.definir_estado("A gerar o resumo…")
         elif linha.startswith("📁"):
@@ -384,7 +458,7 @@ class Janela(Gtk.ApplicationWindow):
         self.proc, self.a_gravar = None, False
         self.bloquear_opcoes(False)
         self.definir_botao("iniciar")
-        self.botao_pasta.set_sensitive(bool(self.pasta))
+        self.botao_pasta.set_sensitive(bool(self.pasta) and Path(self.pasta).is_dir())
         self.mostrar_resultados()
         if codigo == 0:
             self.definir_estado("Concluído")
@@ -407,7 +481,9 @@ class Janela(Gtk.ApplicationWindow):
         self.vista_resumo.set_sensitive((pasta / "resumo.md").exists())
         self.vista_transcricao.set_sensitive((pasta / "transcricao.txt").exists())
         self.botao_audio.set_sensitive((pasta / "audio.wav").exists())
-        self.resultados.show()
+        if (self.vista_resumo.get_sensitive() or self.vista_transcricao.get_sensitive()
+                or self.botao_audio.get_sensitive()):
+            self.resultados.show()
 
     def mostrar_ficheiro(self, nome: str):
         """Substitui o conteúdo do painel pelo ficheiro da reunião."""
@@ -422,7 +498,8 @@ class Janela(Gtk.ApplicationWindow):
         buffer.set_text(conteudo.rstrip() + "\n")
         self.ultima_substituivel = False
         buffer.place_cursor(buffer.get_start_iter())
-        self.texto.scroll_to_iter(buffer.get_start_iter(), 0, False, 0, 0)
+        # Só depois de o GTK medir o novo texto é que o scroll para o topo é fiável.
+        GLib.idle_add(lambda: self.rolagem.get_vadjustment().set_value(0) or False)
 
     def copiar(self):
         """Copia para a área de transferência o ficheiro que está no painel."""
