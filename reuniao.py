@@ -17,10 +17,12 @@ import datetime as dt
 import json
 import os
 import queue
+import re
 import shutil
 import signal
 import subprocess
 import sys
+import tarfile
 import textwrap
 import urllib.error
 import urllib.request
@@ -36,6 +38,14 @@ MODELO_OLLAMA = "qwen3:8b"             # alternativas: llama3.1:8b, gemma3:4b
 OLLAMA_URL = "http://localhost:11434"
 TAXA_AMOSTRAGEM = 16000                # 16 kHz mono é o que o Whisper usa
 TAMANHO_BLOCO = 12000                  # caracteres por bloco nas reuniões longas
+
+# Identificação de quem fala (diarização) com sherpa-onnx; os modelos descarregam-se na
+# primeira utilização para PASTA_MODELOS.
+PASTA_MODELOS = Path.home() / ".cache" / "reuniao" / "modelos"
+URL_MODELOS = "https://github.com/k2-fsa/sherpa-onnx/releases/download"
+MODELO_SEGMENTACAO = "sherpa-onnx-pyannote-segmentation-3-0"   # onde há fala e mudanças de voz
+MODELO_VOZES = "wespeaker_en_voxceleb_resnet34_LM.onnx"           # "impressão digital" de cada voz
+LIMIAR_ORADORES = 0.5                  # sem --pessoas: mais baixo → separa mais vozes
 
 
 # ----------------------------------------------------------------------------
@@ -161,7 +171,10 @@ def carregar_modelo(nome: str, forcar_cpu: bool):
     return WhisperModel(nome_cpu, device="cpu", compute_type="int8")
 
 
-def transcrever(wav: Path, nome_modelo: str, idioma: str, forcar_cpu: bool) -> list[dict]:
+def transcrever(wav: Path, nome_modelo: str, idioma: str, forcar_cpu: bool,
+                palavras: bool = False) -> list[dict]:
+    """Segmentos {inicio, fim, texto}; com palavras=True, também os tempos de cada palavra
+    (precisos para saber quem disse o quê quando duas pessoas falam no mesmo segmento)."""
     import numpy as np
     import soundfile as sf
 
@@ -179,10 +192,14 @@ def transcrever(wav: Path, nome_modelo: str, idioma: str, forcar_cpu: bool) -> l
         np.ascontiguousarray(audio), language=idioma, beam_size=5,
         vad_filter=True,                       # ignora silêncios
         vad_parameters={"min_silence_duration_ms": 500},
+        word_timestamps=palavras,
     )
     resultado = []
     for s in segmentos:
-        resultado.append({"inicio": s.start, "fim": s.end, "texto": s.text.strip()})
+        segmento = {"inicio": s.start, "fim": s.end, "texto": s.text.strip()}
+        if palavras:
+            segmento["palavras"] = [(p.start, p.end, p.word) for p in s.words or []]
+        resultado.append(segmento)
         print(f"\r    {s.end / total:5.0%}", end="", flush=True)
     print("\r    100%\n")
     del segmentos, modelo                      # liberta a VRAM antes do Ollama carregar o LLM
@@ -196,20 +213,157 @@ def formatar_tempo(segundos: float) -> str:
 
 
 def guardar_transcricao(segmentos: list[dict], pasta: Path) -> str:
-    texto_corrido = " ".join(s["texto"] for s in segmentos)
-    com_tempos = "\n".join(f"[{formatar_tempo(s['inicio'])}] {s['texto']}" for s in segmentos)
+    def fala(s):
+        return f"{s['orador']}: {s['texto']}" if "orador" in s else s["texto"]
+    com_tempos = "\n".join(f"[{formatar_tempo(s['inicio'])}] {fala(s)}" for s in segmentos)
     (pasta / "transcricao.txt").write_text(com_tempos + "\n", encoding="utf-8")
     (pasta / "transcricao.json").write_text(
         json.dumps(segmentos, ensure_ascii=False, indent=2), encoding="utf-8")
-    return texto_corrido
+    return texto_para_resumo(segmentos)
+
+
+def texto_para_resumo(segmentos: list[dict]) -> str:
+    """Texto que vai para o LLM: corrido, ou uma linha por vez que alguém fala."""
+    if not any("orador" in s for s in segmentos):
+        return " ".join(s["texto"] for s in segmentos)
+    falas: list[list[str]] = []                       # [orador, texto]
+    for s in segmentos:
+        if falas and falas[-1][0] == s.get("orador"):
+            falas[-1][1] += " " + s["texto"]
+        else:
+            falas.append([s.get("orador"), s["texto"]])
+    return "\n".join(f"{orador}: {texto}" if orador else texto for orador, texto in falas)
+
+
+# ----------------------------------------------------------------------------
+# 2b. Quem fala (diarização)
+# ----------------------------------------------------------------------------
+def descarregar(url: str, destino: Path) -> None:
+    # Para um ficheiro temporário: um download interrompido não deixa um modelo corrompido.
+    temporario = destino.with_name(destino.name + ".parcial")
+    try:
+        urllib.request.urlretrieve(url, temporario)
+    except (urllib.error.URLError, OSError) as erro:
+        temporario.unlink(missing_ok=True)
+        sys.exit(f"Erro: não foi possível descarregar {url.rsplit('/', 1)[1]} ({erro}). "
+                 "A identificação de oradores precisa de internet na primeira utilização; "
+                 "pode desligá-la com --sem-oradores.")
+    temporario.rename(destino)
+
+
+def modelos_oradores() -> tuple[Path, Path]:
+    segmentacao = PASTA_MODELOS / MODELO_SEGMENTACAO / "model.onnx"
+    vozes = PASTA_MODELOS / MODELO_VOZES
+    if segmentacao.exists() and vozes.exists():
+        return segmentacao, vozes
+    print("⬇️  A descarregar os modelos de identificação de oradores (~33 MB, só da primeira vez)...")
+    PASTA_MODELOS.mkdir(parents=True, exist_ok=True)
+    if not segmentacao.exists():
+        arquivo = PASTA_MODELOS / f"{MODELO_SEGMENTACAO}.tar.bz2"
+        descarregar(f"{URL_MODELOS}/speaker-segmentation-models/{arquivo.name}", arquivo)
+        temporaria = PASTA_MODELOS / ".a-extrair"
+        shutil.rmtree(temporaria, ignore_errors=True)
+        with tarfile.open(arquivo) as tar:
+            tar.extractall(temporaria, filter="data")
+        shutil.rmtree(segmentacao.parent, ignore_errors=True)
+        (temporaria / MODELO_SEGMENTACAO).rename(segmentacao.parent)
+        shutil.rmtree(temporaria)
+        arquivo.unlink()
+    if not vozes.exists():
+        # "recongition" (sic) é o nome da release no GitHub do sherpa-onnx
+        descarregar(f"{URL_MODELOS}/speaker-recongition-models/{MODELO_VOZES}", vozes)
+    return segmentacao, vozes
+
+
+def diarizar(wav: Path, pessoas: int | None) -> list[tuple[float, float, int]]:
+    """Turnos (início, fim, orador) de cada voz; pessoas=None deteta quantas são."""
+    import sherpa_onnx
+    import soundfile as sf
+
+    segmentacao, vozes = modelos_oradores()
+    print("👥 A identificar quem fala...")
+    fios = max(1, (os.cpu_count() or 2) // 2)
+    config = sherpa_onnx.OfflineSpeakerDiarizationConfig(
+        segmentation=sherpa_onnx.OfflineSpeakerSegmentationModelConfig(
+            pyannote=sherpa_onnx.OfflineSpeakerSegmentationPyannoteModelConfig(
+                model=str(segmentacao)),
+            num_threads=fios),
+        embedding=sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=str(vozes),
+                                                              num_threads=fios),
+        clustering=sherpa_onnx.FastClusteringConfig(num_clusters=pessoas or -1,
+                                                    threshold=LIMIAR_ORADORES),
+        min_duration_on=0.3, min_duration_off=0.5)
+    diarizador = sherpa_onnx.OfflineSpeakerDiarization(config)
+
+    audio, _ = sf.read(wav, dtype="float32")
+    if audio.ndim > 1:
+        audio = audio.mean(axis=1)
+
+    def progresso(feitos: int, total: int) -> int:
+        print(f"\r    {feitos / total:5.0%}", end="", flush=True)
+        return 0                                   # 0 = continuar
+    turnos = diarizador.process(audio, callback=progresso).sort_by_start_time()
+    print("\r    100%\n")
+    return [(t.start, t.end, t.speaker) for t in turnos]
+
+
+def atribuir_oradores(segmentos: list[dict], turnos: list[tuple[float, float, int]]) -> list[dict]:
+    """Dá a cada palavra o orador cujo turno mais se sobrepõe a ela e reparte os segmentos
+    onde a voz muda. Os oradores ficam "Pessoa 1, 2…" pela ordem em que falam.
+    Com uma só voz, devolve os segmentos sem rótulos."""
+    sem_palavras = [{k: v for k, v in s.items() if k != "palavras"} for s in segmentos]
+    if len({orador for _, _, orador in turnos}) < 2:
+        print("👥 Só foi identificada uma voz.\n")
+        return sem_palavras
+
+    def orador_de(inicio: float, fim: float) -> int:
+        melhor, sobreposicao = None, 0.0
+        for a, b, orador in turnos:
+            if min(fim, b) - max(inicio, a) > sobreposicao:
+                melhor, sobreposicao = orador, min(fim, b) - max(inicio, a)
+        if melhor is None:                         # fora de qualquer turno: o mais próximo
+            melhor = min(turnos, key=lambda t: max(t[0] - fim, inicio - t[1], 0))[2]
+        return melhor
+
+    nomes: dict[int, str] = {}
+    resultado = []
+    for s, simples in zip(segmentos, sem_palavras):
+        palavras = s.get("palavras") or [(s["inicio"], s["fim"], s["texto"])]
+        grupos: list[list] = []                    # [orador, início, fim, texto]
+        for inicio, fim, palavra in palavras:
+            orador = orador_de(inicio, fim)
+            if grupos and grupos[-1][0] == orador:
+                grupos[-1][2], grupos[-1][3] = fim, grupos[-1][3] + palavra
+            else:
+                grupos.append([orador, inicio, fim, palavra])
+        for orador, inicio, fim, texto in grupos:
+            if not texto.strip():
+                continue
+            nome = nomes.setdefault(orador, f"Pessoa {len(nomes) + 1}")
+            if len(grupos) == 1:
+                resultado.append({**simples, "orador": nome})
+            else:
+                resultado.append({"inicio": inicio, "fim": fim, "texto": texto.strip(),
+                                  "orador": nome})
+    if len(nomes) < 2:                             # a outra voz não tinha palavras
+        print("👥 Só foi identificada uma voz.\n")
+        return sem_palavras
+    print(f"👥 {len(nomes)} pessoas identificadas.\n")
+    return resultado
 
 
 # ----------------------------------------------------------------------------
 # 3. Resumo (LLM local via Ollama)
 # ----------------------------------------------------------------------------
+NOTA_SEM_ORADORES = "pode ter erros de reconhecimento e não identifica quem fala"
+NOTA_COM_ORADORES = (
+    "pode ter erros de reconhecimento; cada fala começa por quem a disse — Pessoa 1, "
+    "Pessoa 2… —, uma atribuição automática que também pode ter erros. Quando for claro, "
+    "indica quem propôs, decidiu ou ficou responsável por cada coisa, usando esses rótulos")
+
 PROMPT_RESUMO = """És um assistente que escreve atas de reuniões. Abaixo está a transcrição
-automática de uma reunião presencial (pode ter erros de reconhecimento e não identifica
-quem fala). Escreve, em português, um resumo em Markdown com exatamente estas secções:
+automática de uma reunião ({nota_oradores}).
+Escreve, em português, um resumo em Markdown com exatamente estas secções:
 
 ## Resumo
 (3 a 5 frases sobre o objetivo e o resultado da reunião)
@@ -235,7 +389,8 @@ TRANSCRIÇÃO:
 \"\"\"
 """
 
-PROMPT_NOTAS = """Segue-se um excerto (parte {n} de {total}) da transcrição de uma reunião.
+PROMPT_NOTAS = """Segue-se um excerto (parte {n} de {total}) da transcrição de uma reunião
+({nota_oradores}).
 Extrai, em português, notas objetivas em tópicos: assuntos discutidos, decisões, tarefas
 (com responsável e prazo, se mencionados), números e datas importantes e questões em aberto.
 Não inventes nada que não esteja no texto.
@@ -275,13 +430,19 @@ def ollama(prompt: str, modelo: str, url: str, descarregar: bool = False) -> str
 
 
 def dividir(texto: str, tamanho: int) -> list[str]:
-    """Divide o texto em blocos de ~tamanho caracteres sem cortar frases."""
+    """Divide o texto em blocos de ~tamanho caracteres sem cortar frases.
+    Com oradores (uma fala por linha), um bloco que começa a meio de uma fala repete
+    quem está a falar, para o LLM não perder essa informação."""
     blocos, atual = [], ""
-    for frase in texto.replace("? ", "?|").replace(". ", ".|").replace("! ", "!|").split("|"):
-        if len(atual) + len(frase) > tamanho and atual:
-            blocos.append(atual.strip())
-            atual = ""
-        atual += frase + " "
+    for linha in texto.splitlines():
+        rotulo = re.match(r"Pessoa \d+: ", linha)
+        for frase in re.split(r"(?<=[.?!]) ", linha):
+            if len(atual) + len(frase) > tamanho and atual.strip():
+                blocos.append(atual.strip())
+                atual = rotulo.group(0) if rotulo and not frase.startswith(rotulo.group(0)) \
+                    else ""
+            atual += frase + " "
+        atual = atual.rstrip() + "\n"
     if atual.strip():
         blocos.append(atual.strip())
     return blocos
@@ -290,6 +451,7 @@ def dividir(texto: str, tamanho: int) -> list[str]:
 def resumir(texto: str, modelo: str, url: str) -> str:
     if not texto.strip():
         return "_A transcrição está vazia — não foi detetada fala no áudio._"
+    nota = NOTA_COM_ORADORES if re.search(r"^Pessoa \d+: ", texto, re.M) else NOTA_SEM_ORADORES
     blocos = dividir(texto, TAMANHO_BLOCO)
     print(f"🤖 A gerar resumo com '{modelo}'"
           + (f" (reunião longa: {len(blocos)} partes)..." if len(blocos) > 1 else "..."))
@@ -299,9 +461,11 @@ def resumir(texto: str, modelo: str, url: str) -> str:
         for i, bloco in enumerate(blocos, 1):
             print(f"    parte {i}/{len(blocos)}")
             notas.append(f"### Parte {i}\n" + ollama(
-                PROMPT_NOTAS.format(n=i, total=len(blocos), texto=bloco), modelo, url))
+                PROMPT_NOTAS.format(n=i, total=len(blocos), texto=bloco, nota_oradores=nota),
+                modelo, url))
         texto = "\n\n".join(notas)
-    return ollama(PROMPT_RESUMO.format(texto=texto), modelo, url, descarregar=True)
+    return ollama(PROMPT_RESUMO.format(texto=texto, nota_oradores=nota), modelo, url,
+                  descarregar=True)
 
 
 # ----------------------------------------------------------------------------
@@ -317,7 +481,11 @@ def nova_pasta(base: Path, titulo: str | None) -> Path:
 
 
 def processar_audio(wav: Path, pasta: Path, args) -> None:
-    segmentos = transcrever(wav, args.whisper, args.idioma, args.cpu)
+    # Com --pessoas 1 não há vozes para distinguir.
+    oradores = not args.sem_oradores and args.pessoas != 1
+    segmentos = transcrever(wav, args.whisper, args.idioma, args.cpu, palavras=oradores)
+    if oradores:
+        segmentos = atribuir_oradores(segmentos, diarizar(wav, args.pessoas))
     texto = guardar_transcricao(segmentos, pasta)
     if args.sem_resumo:
         print(f"📁 Transcrição em: {pasta}")
@@ -357,6 +525,10 @@ def main():
         p.add_argument("--ollama-url", default=padrao(OLLAMA_URL))
         p.add_argument("--sem-resumo", action="store_true", default=padrao(False),
                        help="só grava e transcreve")
+        p.add_argument("--pessoas", type=int, default=padrao(None),
+                       help="quantas pessoas falam (por defeito é detetado sozinho)")
+        p.add_argument("--sem-oradores", action="store_true", default=padrao(False),
+                       help="não identificar quem fala")
 
     # as opções valem antes ou depois do subcomando
     opcoes(parser, lambda v: v)
@@ -376,6 +548,8 @@ def main():
     r.add_argument("transcricao", type=Path)
     sub.add_parser("microfones", help="lista os dispositivos de áudio")
     args = parser.parse_args()
+    if args.pessoas is not None and args.pessoas < 1:
+        parser.error("--pessoas tem de ser 1 ou mais")
 
     if args.comando in (None, "gui"):
         # A interface usa o GTK do sistema (python3-gi), que não está no .venv.
@@ -406,9 +580,15 @@ def main():
         wav = para_wav(args.audio, pasta / "audio.wav")
         processar_audio(wav, pasta, args)
     elif args.comando == "resumir":
-        linhas = args.transcricao.read_text(encoding="utf-8").splitlines()
-        texto = " ".join(l.split("] ", 1)[-1] for l in linhas if l.strip())
-        gerar_resumo(texto, args.transcricao.parent, args)
+        # "[mm:ss] Pessoa N: texto" ou "[mm:ss] texto" → segmentos, para juntar as falas
+        segmentos = []
+        for linha in args.transcricao.read_text(encoding="utf-8").splitlines():
+            if linha.strip():
+                fala = linha.split("] ", 1)[-1]
+                orador = re.match(r"(Pessoa \d+): (.*)", fala)
+                segmentos.append({"orador": orador[1], "texto": orador[2]} if orador
+                                 else {"texto": fala})
+        gerar_resumo(texto_para_resumo(segmentos), args.transcricao.parent, args)
 
 
 if __name__ == "__main__":

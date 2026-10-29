@@ -10,6 +10,7 @@ Corre com o Python do sistema (precisa de python3-gi), não com o do .venv.
 import codecs
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -137,6 +138,24 @@ class Janela(Gtk.ApplicationWindow):
         self.gpu = Gtk.Switch(active=prefs.get("gpu", shutil.which("nvidia-smi") is not None))
         lista.add(linha_de_preferencias(
             "Usar GPU", "Transcrição muito mais rápida (NVIDIA)", self.gpu)[0])
+
+        self.oradores = Gtk.Switch(active=prefs.get("oradores", True))
+        lista.add(linha_de_preferencias(
+            "Identificar quem fala", "Distingue as vozes na transcrição (Pessoa 1, 2…)",
+            self.oradores)[0])
+        # 0 = automático. Não fica nas preferências: depende de cada reunião.
+        self.pessoas = Gtk.SpinButton.new_with_range(0, 20, 1)
+        self.pessoas.set_editable(False)           # muda-se com − / +; o texto é "Automático"
+        self.pessoas.set_numeric(False)            # em modo numérico o GTK recusa esse texto
+        self.pessoas.set_width_chars(10)
+        self.pessoas.connect("output", self.mostrar_pessoas)
+        self.pessoas.update()
+        lista.add(linha_de_preferencias(
+            "Número de pessoas", "Se souberes quantas são, a separação das vozes melhora",
+            self.pessoas)[0])
+        self.oradores.connect("notify::active", lambda *_: self.pessoas.set_sensitive(
+            self.oradores.get_active()))
+        self.pessoas.set_sensitive(self.oradores.get_active())
         corpo.pack_start(moldura, False, False, 0)
 
         # Botão principal
@@ -214,6 +233,7 @@ class Janela(Gtk.ApplicationWindow):
         self.texto = Gtk.TextView(editable=False, cursor_visible=False, monospace=True,
                                   wrap_mode=Gtk.WrapMode.WORD_CHAR, left_margin=10,
                                   right_margin=10, top_margin=8, bottom_margin=8)
+        self.texto.get_buffer().create_tag("orador", weight=Pango.Weight.BOLD)
         self.rolagem = Gtk.ScrolledWindow(vexpand=True, min_content_height=160)
         self.rolagem.add(self.texto)
         moldura_texto = Gtk.Frame()
@@ -282,16 +302,33 @@ class Janela(Gtk.ApplicationWindow):
 
     def bloquear_opcoes(self, bloquear: bool):
         for w in (self.titulo, self.radio_vivo, self.radio_online, self.combo_mic, self.gpu,
-                  self.botao_ficheiro):
+                  self.oradores, self.pessoas, self.botao_ficheiro):
             w.set_sensitive(not bloquear)
+        if not bloquear:
+            self.pessoas.set_sensitive(self.oradores.get_active())
 
     # ------------------------------------------------------------- subprocesso
-    def argumentos(self) -> list[str]:
-        args = COMANDO + ["gravar"]
+    @staticmethod
+    def mostrar_pessoas(botao: Gtk.SpinButton) -> bool:
+        valor = botao.get_value_as_int()
+        botao.set_text(str(valor) if valor else "Automático")
+        return True                                # True = o texto já foi definido
+
+    def opcoes_comuns(self) -> list[str]:
+        """Opções que valem tanto para gravar como para processar um ficheiro."""
+        args = []
         if self.titulo.get_text().strip():
             args += ["--titulo", self.titulo.get_text().strip()]
         if not self.gpu.get_active():
             args.append("--cpu")
+        if not self.oradores.get_active():
+            args.append("--sem-oradores")
+        elif self.pessoas.get_value_as_int():
+            args += ["--pessoas", str(self.pessoas.get_value_as_int())]
+        return args
+
+    def argumentos(self) -> list[str]:
+        args = COMANDO + ["gravar"] + self.opcoes_comuns()
         if self.modo() == "online":
             args.append("--meet")
         mic = self.combo_mic.get_active_id()
@@ -343,12 +380,7 @@ class Janela(Gtk.ApplicationWindow):
                 return
 
     def processar(self, audio: Path):
-        args = COMANDO + ["processar", str(audio)]
-        if self.titulo.get_text().strip():
-            args += ["--titulo", self.titulo.get_text().strip()]
-        if not self.gpu.get_active():
-            args.append("--cpu")
-        self.iniciar(args)
+        self.iniciar(COMANDO + ["processar", str(audio)] + self.opcoes_comuns())
         # Não há gravação a decorrer: ao fechar a janela pergunta-se só pelo processamento.
         self.gravacao_fechada = True
 
@@ -434,6 +466,11 @@ class Janela(Gtk.ApplicationWindow):
         elif linha.startswith("📝"):
             if self.barra.get_subtitle() != "A transcrever no CPU…":   # mantém o aviso da GPU
                 self.definir_estado("A transcrever…")
+        elif linha.startswith("⬇"):
+            self.definir_estado("A descarregar modelos…",
+                                "Só acontece na primeira vez que se identifica quem fala.")
+        elif linha.startswith("👥 A identificar"):
+            self.definir_estado("A identificar quem fala…")
         elif linha.startswith("🤖"):
             self.definir_estado("A gerar o resumo…")
         elif linha.startswith("📁"):
@@ -496,6 +533,14 @@ class Janela(Gtk.ApplicationWindow):
         self.texto.set_monospace(nome == "transcricao.txt")
         buffer = self.texto.get_buffer()
         buffer.set_text(conteudo.rstrip() + "\n")
+        if nome == "transcricao.txt":
+            # "[mm:ss] Pessoa N: …" — o nome a negrito marca onde cada pessoa começa a falar
+            for n, linha in enumerate(conteudo.splitlines()):
+                orador = re.match(r"\[[\d:]+\] (Pessoa \d+:)", linha)
+                if orador:
+                    buffer.apply_tag_by_name("orador",
+                                             buffer.get_iter_at_line_offset(n, orador.start(1)),
+                                             buffer.get_iter_at_line_offset(n, orador.end(1)))
         self.ultima_substituivel = False
         buffer.place_cursor(buffer.get_start_iter())
         # Só depois de o GTK medir o novo texto é que o scroll para o topo é fiável.
@@ -584,7 +629,7 @@ class Janela(Gtk.ApplicationWindow):
             PREFERENCIAS.parent.mkdir(parents=True, exist_ok=True)
             PREFERENCIAS.write_text(json.dumps(
                 {"modo": self.modo(), "gpu": self.gpu.get_active(),
-                 "mic": self.combo_mic.get_active_id()},
+                 "mic": self.combo_mic.get_active_id(), "oradores": self.oradores.get_active()},
                 ensure_ascii=False, indent=2), encoding="utf-8")
         except OSError:
             pass
