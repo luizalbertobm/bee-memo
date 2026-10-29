@@ -1,169 +1,243 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 """
-Interface gráfica da Reunião Local — uma janela com um botão de gravar/terminar.
+Interface gráfica da Reunião Local, em GTK 3 — o toolkit do ambiente de trabalho
+(Zorin OS / GNOME), por isso segue o tema, a fonte, os ícones e o modo escuro do sistema.
 
 Não reimplementa o pipeline: constrói a linha de comandos e lança o reuniao.py
 como subprocesso, mostrando o que ele imprime. Abre-se com `reuniao` sem argumentos.
+Corre com o Python do sistema (precisa de python3-gi), não com o do .venv.
 """
+import codecs
 import json
 import os
-import queue
 import shutil
 import signal
 import subprocess
 import threading
 import time
-import tkinter as tk
 from pathlib import Path
-from tkinter import messagebox, ttk
+
+import gi
+
+gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
+from gi.repository import Gdk, GLib, Gtk, Pango  # noqa: E402
 
 PASTA = Path(__file__).resolve().parent
 # O atalho `reuniao` configura as bibliotecas CUDA e arranca o Ollama; se existir, usamo-lo.
 COMANDO = [str(PASTA / "reuniao")] if (PASTA / "reuniao").is_file() \
     else [str(PASTA / ".venv/bin/python"), str(PASTA / "reuniao.py")]
 PREFERENCIAS = Path.home() / ".config" / "reuniao" / "interface.json"
-NOTA_ONLINE = ("Entra na reunião no browser como habitualmente. Grava-se o microfone e o som do\n"
-               "sistema (os outros participantes). Avisa-os de que a reunião está a ser gravada.")
+ICONE = "audio-input-microphone"
+DESCRICAO_MODO = {
+    "vivo": "Grava só o microfone — reuniões presenciais.",
+    "online": "Grava o microfone e o som do sistema (Meet, Teams, Zoom…). "
+              "Avisa os participantes de que a reunião está a ser gravada.",
+}
 
 
 def microfones() -> list[tuple[str, str]]:
-    """[(valor para --dispositivo, texto a mostrar)], com o predefinido em primeiro."""
+    """[(nome da fonte PulseAudio, descrição)], com o predefinido do sistema em primeiro."""
     opcoes = [("", "Predefinido do sistema")]
     try:
-        import sounddevice as sd
-        for i, d in enumerate(sd.query_devices()):
-            if d["max_input_channels"] > 0:
-                opcoes.append((str(i), f"{i} — {d['name']}"))
-    except Exception:
-        pass
+        saida = subprocess.run(["pactl", "list", "sources"], capture_output=True, text=True,
+                               env={**os.environ, "LC_ALL": "C"}, check=True).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return opcoes
+    nome = None
+    for linha in saida.splitlines():
+        linha = linha.strip()
+        if linha.startswith("Name:"):
+            nome = linha.split(":", 1)[1].strip()
+        elif linha.startswith("Description:") and nome and not nome.endswith(".monitor"):
+            opcoes.append((nome, linha.split(":", 1)[1].strip()))
     return opcoes
 
 
-class Janela:
-    def __init__(self, root: tk.Tk):
-        self.root = root
+def linha_de_preferencias(titulo: str, subtitulo: str, controlo: Gtk.Widget,
+                          expandir: bool = False) -> tuple[Gtk.ListBoxRow, Gtk.Label]:
+    """Linha no estilo das Definições do GNOME: título (+ subtítulo) à esquerda, controlo à direita."""
+    caixa = Gtk.Box(spacing=12, margin_top=8, margin_bottom=8, margin_start=12, margin_end=12)
+    textos = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, valign=Gtk.Align.CENTER)
+    textos.pack_start(Gtk.Label(label=titulo, xalign=0), False, False, 0)
+    sub = Gtk.Label(label=subtitulo, xalign=0, wrap=True, max_width_chars=40)
+    sub.get_style_context().add_class("dim-label")
+    sub.set_no_show_all(not subtitulo)
+    textos.pack_start(sub, False, False, 0)
+    caixa.pack_start(textos, not expandir, True, 0)
+    controlo.set_valign(Gtk.Align.CENTER)
+    caixa.pack_end(controlo, expandir, expandir, 0)
+    linha = Gtk.ListBoxRow(activatable=False, selectable=False)
+    linha.add(caixa)
+    return linha, sub
+
+
+class Janela(Gtk.ApplicationWindow):
+    def __init__(self, app: Gtk.Application):
+        super().__init__(application=app, title="Reunião Local", icon_name=ICONE)
+        self.set_default_size(560, 640)
         self.proc: subprocess.Popen | None = None
-        self.fila: "queue.Queue" = queue.Queue()
         self.pasta: str | None = None
-        self.inicio = 0.0
         self.erro = ""
+        self.inicio = 0.0
         self.gravacao_fechada = False
+        self.a_gravar = False
+        self.ultima_substituivel = False
         self.mics = microfones()
-
-        prefs = self.carregar_preferencias()
-        self.titulo = tk.StringVar()
-        self.modo = tk.StringVar(value=prefs.get("modo", "vivo"))
-        self.gpu = tk.BooleanVar(value=prefs.get("gpu", shutil.which("nvidia-smi") is not None))
-        self.mic = tk.StringVar(value=prefs.get("mic") or self.mics[0][1])
-        if self.mic.get() not in [texto for _, texto in self.mics]:
-            self.mic.set(self.mics[0][1])
-
-        self.montar()
-        self.root.protocol("WM_DELETE_WINDOW", self.fechar)
-        self.root.after(100, self.tique)
+        self.montar(self.carregar_preferencias())
+        self.connect("delete-event", self.ao_fechar)
+        GLib.timeout_add(500, self.tique)
 
     # ------------------------------------------------------------------ layout
-    def montar(self):
-        self.root.title("Reunião Local")
-        self.root.minsize(560, 480)
-        f = ttk.Frame(self.root, padding=12)
-        f.pack(fill="both", expand=True)
-        f.columnconfigure(1, weight=1)
+    def montar(self, prefs: dict):
+        barra = Gtk.HeaderBar(title="Reunião Local", show_close_button=True)
+        barra.set_subtitle("Pronto")
+        self.barra = barra
+        self.botao_pasta = Gtk.Button.new_from_icon_name("folder-open-symbolic",
+                                                         Gtk.IconSize.BUTTON)
+        self.botao_pasta.set_tooltip_text("Abrir a pasta da reunião")
+        self.botao_pasta.set_sensitive(False)
+        self.botao_pasta.connect("clicked", lambda *_: self.abrir_pasta())
+        barra.pack_end(self.botao_pasta)
+        self.set_titlebar(barra)
 
-        ttk.Label(f, text="Título").grid(row=0, column=0, sticky="w", pady=4)
-        self.campo_titulo = ttk.Entry(f, textvariable=self.titulo)
-        self.campo_titulo.grid(row=0, column=1, sticky="ew", pady=4)
+        corpo = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18,
+                        margin_top=18, margin_bottom=18, margin_start=18, margin_end=18)
 
-        ttk.Label(f, text="Modo").grid(row=1, column=0, sticky="w", pady=4)
-        modos = ttk.Frame(f)
-        modos.grid(row=1, column=1, sticky="w")
-        self.radio_vivo = ttk.Radiobutton(modos, text="Ao vivo (só microfone)", value="vivo",
-                                          variable=self.modo, command=self.atualizar_modo)
-        self.radio_online = ttk.Radiobutton(modos, text="Online (Meet, Teams, Zoom…)",
-                                            value="online", variable=self.modo,
-                                            command=self.atualizar_modo)
-        self.radio_vivo.pack(side="left", padx=(0, 12))
-        self.radio_online.pack(side="left")
-        self.nota = ttk.Label(f, text=NOTA_ONLINE, foreground="#555", justify="left")
+        # Opções, como uma lista de preferências do GNOME
+        lista = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
+        lista.set_header_func(self.separador)
+        moldura = Gtk.Frame()
+        moldura.add(lista)
 
-        ttk.Label(f, text="Microfone").grid(row=3, column=0, sticky="w", pady=4)
-        self.combo_mic = ttk.Combobox(f, textvariable=self.mic, state="readonly",
-                                      values=[texto for _, texto in self.mics])
-        self.combo_mic.grid(row=3, column=1, sticky="ew", pady=4)
+        self.titulo = Gtk.Entry(placeholder_text="Opcional — usado no nome da pasta",
+                                width_chars=28)
+        lista.add(linha_de_preferencias("Título", "", self.titulo, expandir=True)[0])
 
-        self.check_gpu = ttk.Checkbutton(f, text="Usar GPU (transcrição mais rápida)",
-                                         variable=self.gpu)
-        self.check_gpu.grid(row=4, column=1, sticky="w", pady=4)
+        modos = Gtk.Box()
+        modos.get_style_context().add_class("linked")
+        self.radio_vivo = Gtk.RadioButton(label="Ao vivo", draw_indicator=False)
+        self.radio_online = Gtk.RadioButton(label="Online", group=self.radio_vivo,
+                                            draw_indicator=False)
+        modos.pack_start(self.radio_vivo, False, False, 0)
+        modos.pack_start(self.radio_online, False, False, 0)
+        linha, self.descricao_modo = linha_de_preferencias("Modo", "", modos)
+        lista.add(linha)
 
-        acao = ttk.Frame(f)
-        acao.grid(row=5, column=0, columnspan=2, pady=14)
-        self.botao = tk.Button(acao, text="⏺  Iniciar gravação", font=("", 12, "bold"),
-                               width=22, pady=6, command=self.alternar)
-        self.botao.pack(side="left")
-        self.cronometro = ttk.Label(acao, text="00:00", font=("", 12))
-        self.cronometro.pack(side="left", padx=12)
+        self.combo_mic = Gtk.ComboBoxText()
+        for nome, descricao in self.mics:
+            self.combo_mic.append(nome or "predefinido", descricao)
+        if not self.combo_mic.set_active_id(prefs.get("mic") or "predefinido"):
+            self.combo_mic.set_active(0)
+        celula = self.combo_mic.get_cells()[0]
+        celula.set_property("ellipsize", Pango.EllipsizeMode.END)
+        celula.set_property("width-chars", 24)
+        lista.add(linha_de_preferencias("Microfone", "", self.combo_mic)[0])
 
-        self.estado = ttk.Label(f, text="Pronto.", foreground="#555")
-        self.estado.grid(row=6, column=0, columnspan=2, sticky="w")
+        self.gpu = Gtk.Switch(active=prefs.get("gpu", shutil.which("nvidia-smi") is not None))
+        lista.add(linha_de_preferencias(
+            "Usar GPU", "Transcrição muito mais rápida (NVIDIA)", self.gpu)[0])
+        corpo.pack_start(moldura, False, False, 0)
 
-        registo = ttk.Frame(f)
-        registo.grid(row=7, column=0, columnspan=2, sticky="nsew", pady=(4, 8))
-        f.rowconfigure(7, weight=1)
-        self.texto = tk.Text(registo, height=12, wrap="word", font=("monospace", 10),
-                             state="disabled", relief="solid", borderwidth=1)
-        barra = ttk.Scrollbar(registo, command=self.texto.yview)
-        self.texto.configure(yscrollcommand=barra.set)
-        self.texto.pack(side="left", fill="both", expand=True)
-        barra.pack(side="right", fill="y")
+        # Botão principal
+        conteudo = Gtk.Box(spacing=8, halign=Gtk.Align.CENTER)
+        self.icone_botao = Gtk.Image.new_from_icon_name("media-record-symbolic",
+                                                        Gtk.IconSize.BUTTON)
+        self.spinner = Gtk.Spinner(no_show_all=True)
+        self.texto_botao = Gtk.Label(label="Iniciar gravação")
+        conteudo.pack_start(self.icone_botao, False, False, 0)
+        conteudo.pack_start(self.spinner, False, False, 0)
+        conteudo.pack_start(self.texto_botao, False, False, 0)
+        self.botao = Gtk.Button(halign=Gtk.Align.CENTER, width_request=240, height_request=44)
+        self.botao.add(conteudo)
+        self.botao.connect("clicked", lambda *_: self.alternar())
+        self.definir_botao("iniciar")
+        corpo.pack_start(self.botao, False, False, 0)
 
-        self.botao_pasta = ttk.Button(f, text="Abrir pasta", state="disabled",
-                                      command=self.abrir_pasta)
-        self.botao_pasta.grid(row=8, column=1, sticky="e")
+        self.estado = Gtk.Label(label="", xalign=0.5, wrap=True, justify=Gtk.Justification.CENTER,
+                                no_show_all=True)
+        self.estado.get_style_context().add_class("dim-label")
+        corpo.pack_start(self.estado, False, False, 0)
 
+        # Registo do processo e, no fim, o resumo
+        self.texto = Gtk.TextView(editable=False, cursor_visible=False, monospace=True,
+                                  wrap_mode=Gtk.WrapMode.WORD_CHAR, left_margin=10,
+                                  right_margin=10, top_margin=8, bottom_margin=8)
+        rolagem = Gtk.ScrolledWindow(vexpand=True, min_content_height=160)
+        rolagem.add(self.texto)
+        moldura_texto = Gtk.Frame()
+        moldura_texto.add(rolagem)
+        corpo.pack_start(moldura_texto, True, True, 0)
+
+        self.add(corpo)
+        self.radio_online.set_active(prefs.get("modo") == "online")
+        self.radio_vivo.connect("toggled", lambda *_: self.atualizar_modo())
         self.atualizar_modo()
-        self.campo_titulo.focus()
+
+    @staticmethod
+    def separador(linha: Gtk.ListBoxRow, anterior: Gtk.ListBoxRow | None):
+        if anterior and not linha.get_header():
+            linha.set_header(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+
+    def modo(self) -> str:
+        return "online" if self.radio_online.get_active() else "vivo"
 
     def atualizar_modo(self):
-        if self.modo.get() == "online":
-            self.nota.grid(row=2, column=1, sticky="w", pady=(0, 4))
-            self.combo_mic.configure(state="disabled")      # o --meet usa o predefinido
-        else:
-            self.nota.grid_remove()
-            self.combo_mic.configure(state="readonly")
+        self.descricao_modo.set_text(DESCRICAO_MODO[self.modo()])
+        self.descricao_modo.show()
 
-    def definir_estado(self, texto: str, cor: str = "#555"):
-        self.estado.configure(text=texto, foreground=cor)
+    def definir_botao(self, estado: str, texto: str = "A processar…"):
+        """iniciar | parar | ocupado — usa as classes de estilo do tema (azul / vermelho)."""
+        contexto = self.botao.get_style_context()
+        contexto.remove_class("suggested-action")
+        contexto.remove_class("destructive-action")
+        if estado == "iniciar":
+            contexto.add_class("suggested-action")
+            self.icone_botao.set_from_icon_name("media-record-symbolic", Gtk.IconSize.BUTTON)
+            self.texto_botao.set_text("Iniciar gravação")
+        elif estado == "parar":
+            contexto.add_class("destructive-action")
+            self.icone_botao.set_from_icon_name("media-playback-stop-symbolic",
+                                                Gtk.IconSize.BUTTON)
+            self.texto_botao.set_text("Terminar reunião  00:00")
+        else:
+            self.texto_botao.set_text(texto)
+        ocupado = estado == "ocupado"
+        self.icone_botao.set_visible(not ocupado)
+        self.spinner.set_visible(ocupado)
+        self.spinner.start() if ocupado else self.spinner.stop()
+        self.botao.set_sensitive(not ocupado)
+
+    def definir_estado(self, subtitulo: str, detalhe: str = ""):
+        self.barra.set_subtitle(subtitulo)
+        self.estado.set_text(detalhe)
+        self.estado.set_visible(bool(detalhe))
 
     def escrever(self, linha: str, substituir: bool = False):
-        self.texto.configure(state="normal")
-        if substituir:
-            self.texto.delete("end-2l", "end-1c")
-        self.texto.insert("end", linha + "\n")
-        self.texto.see("end")
-        self.texto.configure(state="disabled")
+        buffer = self.texto.get_buffer()
+        if substituir and self.ultima_substituivel:
+            inicio = buffer.get_iter_at_line(max(buffer.get_line_count() - 2, 0))
+            buffer.delete(inicio, buffer.get_end_iter())
+        buffer.insert(buffer.get_end_iter(), linha + "\n")
+        self.ultima_substituivel = substituir
+        self.texto.scroll_to_mark(buffer.get_insert(), 0, False, 0, 1)
 
     def bloquear_opcoes(self, bloquear: bool):
-        estado = "disabled" if bloquear else "normal"
-        for w in (self.campo_titulo, self.radio_vivo, self.radio_online, self.check_gpu):
-            w.configure(state=estado)
-        if bloquear:
-            self.combo_mic.configure(state="disabled")
-        else:
-            self.atualizar_modo()
+        for w in (self.titulo, self.radio_vivo, self.radio_online, self.combo_mic, self.gpu):
+            w.set_sensitive(not bloquear)
 
     # ------------------------------------------------------------- subprocesso
     def argumentos(self) -> list[str]:
         args = COMANDO + ["gravar"]
-        if self.titulo.get().strip():
-            args += ["--titulo", self.titulo.get().strip()]
-        if not self.gpu.get():
+        if self.titulo.get_text().strip():
+            args += ["--titulo", self.titulo.get_text().strip()]
+        if not self.gpu.get_active():
             args.append("--cpu")
-        if self.modo.get() == "online":
+        if self.modo() == "online":
             args.append("--meet")
-        else:
-            valor = dict((texto, v) for v, texto in self.mics).get(self.mic.get(), "")
-            if valor:
-                args += ["--dispositivo", valor]
+        mic = self.combo_mic.get_active_id()
+        if mic and mic != "predefinido":
+            args += ["--dispositivo", mic]
         return args
 
     def alternar(self):
@@ -175,143 +249,154 @@ class Janela:
     def iniciar(self):
         self.guardar_preferencias()
         self.pasta, self.erro, self.gravacao_fechada = None, "", False
-        self.texto.configure(state="normal")
-        self.texto.delete("1.0", "end")
-        self.texto.configure(state="disabled")
-        self.botao_pasta.configure(state="disabled")
+        self.texto.get_buffer().set_text("")
+        self.ultima_substituivel = False
+        self.botao_pasta.set_sensitive(False)
         try:
+            # Em bytes: em modo texto o Python converteria os \r em \n, e é pelos \r
+            # que se distinguem as linhas que se atualizam no lugar (cronómetro, %).
             self.proc = subprocess.Popen(
                 self.argumentos(), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                text=True, encoding="utf-8", errors="replace", bufsize=0, cwd=PASTA,
+                bufsize=0, cwd=PASTA,
                 # sem isto o Python filho guarda os prints num buffer até sair
                 env={**os.environ, "PYTHONUNBUFFERED": "1"})
         except OSError as erro:
-            messagebox.showerror("Reunião Local", f"Não foi possível arrancar a gravação:\n{erro}")
+            self.mensagem(Gtk.MessageType.ERROR, "Não foi possível iniciar a gravação",
+                          str(erro))
             self.proc = None
             return
-        threading.Thread(target=self.ler, daemon=True).start()
+        threading.Thread(target=self.ler, args=(self.proc,), daemon=True).start()
         self.bloquear_opcoes(True)
-        self.botao.configure(text="A iniciar…", state="disabled")
-        self.definir_estado("A preparar a gravação…")
+        self.definir_botao("ocupado", "A iniciar…")
+        self.definir_estado("A preparar…")
 
     def terminar(self):
         if self.proc and self.proc.poll() is None:
             self.proc.send_signal(signal.SIGINT)        # o mesmo que Ctrl+C no terminal
-        self.botao.configure(text="A processar…", state="disabled", bg=self.root.cget("bg"))
+        self.a_gravar = False
+        self.definir_botao("ocupado")
         self.definir_estado("A terminar a gravação…")
 
-    def ler(self):
+    def ler(self, proc: subprocess.Popen):
         """Thread: lê a saída do processo e separa em linhas por \\n e por \\r."""
-        anterior = "\n"
-        atual = ""
+        descodificador = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        anterior, atual = "\n", ""
         while True:
-            c = self.proc.stdout.read(1)
-            if not c:
+            bloco = os.read(proc.stdout.fileno(), 4096)
+            if not bloco:
                 break
-            if c in "\r\n":
-                self.fila.put((anterior == "\r", atual))
-                anterior, atual = c, ""
-            else:
-                atual += c
+            for c in descodificador.decode(bloco):
+                if c in "\r\n":
+                    GLib.idle_add(self.receber, anterior == "\r", atual)
+                    anterior, atual = c, ""
+                else:
+                    atual += c
         if atual:
-            self.fila.put((anterior == "\r", atual))
-        self.proc.wait()
-        self.fila.put(None)
+            GLib.idle_add(self.receber, anterior == "\r", atual)
+        proc.wait()
+        GLib.idle_add(self.concluir)
 
-    def tique(self):
-        self.drenar()
-        if self.proc and self.inicio and self.botao.cget("text").startswith("⏹"):
-            seg = int(time.time() - self.inicio)
-            self.cronometro.configure(text=f"{seg // 60:02d}:{seg % 60:02d}")
-        self.root.after(100, self.tique)
-
-    def drenar(self):
-        while True:
-            try:
-                item = self.fila.get_nowait()
-            except queue.Empty:
-                return
-            if item is None:
-                self.concluir()
-                return
-            substituir, linha = item
-            if "HF Hub" in linha:                        # aviso irrelevante do Hugging Face
-                continue
+    def receber(self, substituir: bool, linha: str):
+        # aviso irrelevante do Hugging Face; a dica do Ctrl+C só faz sentido no terminal
+        if linha.strip() and "HF Hub" not in linha and "Ctrl+C" not in linha:
             self.escrever(linha.rstrip(), substituir)
             self.interpretar(linha)
+        return False
 
     def interpretar(self, linha: str):
         if linha.startswith("🎙"):
             # "🎙️  A gravar para <pasta>/audio.wav" — fica já a pasta, para o botão
-            # "Abrir pasta" funcionar mesmo que a transcrição ou o resumo falhem
+            # da pasta funcionar mesmo que a transcrição ou o resumo falhem
             if " para " in linha:
                 self.pasta = str(Path(linha.split(" para ", 1)[1].strip()).parent)
-            self.inicio = time.time()
-            self.botao.configure(text="⏹  Terminar reunião", state="normal",
-                                 bg="#c62828", fg="white", activebackground="#b71c1c")
-            self.definir_estado("A gravar. Carrega em Terminar quando a reunião acabar.",
-                                "#c62828")
+            self.inicio, self.a_gravar = time.time(), True
+            self.definir_botao("parar")
+            self.definir_estado("A gravar", "Carrega em Terminar quando a reunião acabar.")
         elif linha.startswith("✅"):
-            self.gravacao_fechada = True
-            self.botao.configure(text="A processar…", state="disabled",
-                                 bg=self.root.cget("bg"), fg="black")
+            self.gravacao_fechada, self.a_gravar = True, False
+            self.definir_botao("ocupado")
             self.definir_estado("A transcrever…")
         elif linha.startswith("🤖"):
             self.definir_estado("A gerar o resumo…")
         elif linha.startswith("📁"):
             self.pasta = linha.split(":", 1)[1].strip()
         elif "GPU indisponível" in linha:
-            self.definir_estado("GPU indisponível — a usar o CPU (mais lento).", "#e65100")
+            self.definir_estado("A transcrever no CPU…",
+                                "GPU indisponível — a transcrição vai demorar mais.")
         elif linha.startswith("Erro:"):
-            self.erro = linha
+            self.erro = linha.removeprefix("Erro:").strip()
+
+    def tique(self) -> bool:
+        if self.a_gravar:
+            seg = int(time.time() - self.inicio)
+            h, resto = divmod(seg, 3600)
+            tempo = f"{h}:{resto // 60:02d}:{resto % 60:02d}" if h else \
+                f"{resto // 60:02d}:{resto % 60:02d}"
+            self.texto_botao.set_text(f"Terminar reunião  {tempo}")
+        return True
 
     def concluir(self):
         codigo = self.proc.returncode if self.proc else 1
-        self.proc = None
+        self.proc, self.a_gravar = None, False
         self.bloquear_opcoes(False)
-        self.botao.configure(text="⏺  Iniciar gravação", state="normal",
-                             bg=self.root.cget("bg"), fg="black")
-        if self.pasta:
-            self.botao_pasta.configure(state="normal")
+        self.definir_botao("iniciar")
+        self.botao_pasta.set_sensitive(bool(self.pasta))
         if codigo == 0:
-            self.definir_estado(f"Concluído. Ficheiros em {self.pasta}", "#2e7d32")
+            self.definir_estado("Concluído", f"Ficheiros em {self.pasta}")
+            self.notificar("Resumo pronto", Path(self.pasta).name if self.pasta else "")
         else:
-            detalhe = self.erro or "ver o registo acima"
-            self.definir_estado("Falhou — " + detalhe, "#c62828")
-            if self.root.winfo_exists():
-                messagebox.showerror("Reunião Local", detalhe)
+            detalhe = self.erro or "Vê os detalhes no registo."
+            self.definir_estado("Falhou", detalhe)
+            self.notificar("A reunião não foi processada", detalhe)
+            self.mensagem(Gtk.MessageType.ERROR, "A reunião não foi processada", detalhe)
+        return False
 
     def abrir_pasta(self):
         if self.pasta:
-            subprocess.Popen(["xdg-open", self.pasta])
+            Gtk.show_uri_on_window(self, Path(self.pasta).as_uri(), Gtk.get_current_event_time())
+
+    def notificar(self, titulo: str, corpo: str):
+        """Notificação do sistema — útil quando a janela está escondida atrás do browser."""
+        if not self.is_active() and shutil.which("notify-send"):
+            subprocess.Popen(["notify-send", "-a", "Reunião Local", "-i", ICONE, titulo, corpo])
+
+    def mensagem(self, tipo: Gtk.MessageType, titulo: str, texto: str,
+                 botoes: Gtk.ButtonsType = Gtk.ButtonsType.CLOSE) -> Gtk.ResponseType:
+        dialogo = Gtk.MessageDialog(transient_for=self, modal=True, message_type=tipo,
+                                    buttons=botoes, text=titulo)
+        dialogo.format_secondary_text(texto)
+        resposta = dialogo.run()
+        dialogo.destroy()
+        return resposta
 
     # ------------------------------------------------------------------ fecho
-    def fechar(self):
+    def ao_fechar(self, *_) -> bool:
+        """Devolve True para impedir o fecho."""
         if self.proc and self.proc.poll() is None:
             if not self.gravacao_fechada:
-                if not messagebox.askyesno(
-                        "Reunião Local",
-                        "A reunião ainda está a ser gravada. Terminar a gravação?\n\n"
-                        "O áudio fica guardado; podes processá-lo depois com\n"
-                        "    reuniao processar <pasta>/audio.wav"):
-                    return
+                titulo = "Terminar a gravação?"
+                texto = ("A reunião ainda está a ser gravada. O áudio fica guardado e podes "
+                         "processá-lo depois com «reuniao processar <pasta>/audio.wav».")
+            else:
+                titulo = "Fechar durante o processamento?"
+                texto = ("A transcrição ou o resumo ainda estão a decorrer. O áudio fica "
+                         "guardado; podes retomar com «reuniao processar <pasta>/audio.wav».")
+            if self.mensagem(Gtk.MessageType.QUESTION, titulo, texto,
+                             Gtk.ButtonsType.YES_NO) != Gtk.ResponseType.YES:
+                return True
+            if not self.gravacao_fechada:
                 self.proc.send_signal(signal.SIGINT)
                 # Espera que a gravação feche o WAV e limpe o áudio do sistema.
                 limite = time.time() + 5
                 while (time.time() < limite and not self.gravacao_fechada
                        and self.proc.poll() is None):
-                    self.drenar()
-                    time.sleep(0.1)
-            elif not messagebox.askyesno(
-                    "Reunião Local",
-                    "A transcrição ou o resumo ainda estão a decorrer. Fechar mesmo assim?\n\n"
-                    "O áudio fica guardado; podes retomar com\n"
-                    "    reuniao processar <pasta>/audio.wav"):
-                return
-            if self.proc.poll() is None:
+                    while Gtk.events_pending():
+                        Gtk.main_iteration()
+                    time.sleep(0.05)
+            if self.proc and self.proc.poll() is None:
                 self.proc.terminate()
         self.guardar_preferencias()
-        self.root.destroy()
+        return False
 
     # ------------------------------------------------------------ preferências
     def carregar_preferencias(self) -> dict:
@@ -324,18 +409,29 @@ class Janela:
         try:
             PREFERENCIAS.parent.mkdir(parents=True, exist_ok=True)
             PREFERENCIAS.write_text(json.dumps(
-                {"modo": self.modo.get(), "gpu": self.gpu.get(), "mic": self.mic.get()},
+                {"modo": self.modo(), "gpu": self.gpu.get_active(),
+                 "mic": self.combo_mic.get_active_id()},
                 ensure_ascii=False, indent=2), encoding="utf-8")
         except OSError:
             pass
 
 
 def main():
-    root = tk.Tk()
-    if "clam" in ttk.Style().theme_names():       # aspeto mais limpo que o Tk clássico
-        ttk.Style().theme_use("clam")
-    Janela(root)
-    root.mainloop()
+    GLib.set_prgname("reuniao")                   # liga a janela ao reuniao.desktop
+    Gdk.set_program_class("reuniao")              # (StartupWMClass) para a dock agrupar o ícone
+    GLib.set_application_name("Reunião Local")
+    app = Gtk.Application(application_id="local.reuniao.Gravador")
+
+    def ativar(app):
+        # Uma só janela: abrir a app de novo traz a existente para a frente.
+        janela = app.get_active_window()
+        if janela:
+            janela.present()
+        else:
+            Janela(app).show_all()
+
+    app.connect("activate", ativar)
+    app.run(None)
 
 
 if __name__ == "__main__":

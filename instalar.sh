@@ -13,7 +13,7 @@ fi
 
 echo "==> Pacotes do sistema (ffmpeg, PortAudio, venv)"
 sudo apt update
-sudo apt install -y ffmpeg libportaudio2 python3-venv python3-pip python3-tk curl
+sudo apt install -y ffmpeg libportaudio2 python3-venv python3-pip python3-gi gir1.2-gtk-3.0 curl
 
 echo "==> Ambiente Python"
 python3 -m venv .venv

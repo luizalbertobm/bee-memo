@@ -38,7 +38,12 @@ Abre uma janela onde se escolhe o **título**, o **modo** (ao vivo = só microfo
 online = microfone + som do sistema, para Meet, Teams, Zoom…), o **microfone** e se a
 transcrição usa a **GPU**. Um botão inicia e termina a gravação; a transcrição e o resumo
 seguem automaticamente e aparecem na própria janela, com um botão para abrir a pasta.
+Quando o resumo fica pronto com a janela em segundo plano, aparece uma notificação do sistema.
 As escolhas ficam guardadas em `~/.config/reuniao/interface.json`.
+
+A janela é feita em GTK 3, por isso segue o tema, a fonte, os ícones e o modo claro/escuro do
+ambiente de trabalho. Os microfones aparecem com os mesmos nomes das Definições de som, e o
+microfone escolhido também é usado no modo online.
 
 A janela é só uma frente para os comandos abaixo — tudo o que faz também se faz no terminal.
 

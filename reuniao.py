@@ -91,8 +91,15 @@ def pactl(*argumentos: str) -> str:
                           text=True).stdout.strip()
 
 
+def fontes_pulse() -> list[str]:
+    """Nomes das fontes de áudio do PulseAudio (microfones e monitores)."""
+    if not shutil.which("pactl"):
+        return []
+    return [linha.split("\t")[1] for linha in pactl("list", "short", "sources").splitlines()]
+
+
 @contextlib.contextmanager
-def capturar_sistema():
+def capturar_sistema(microfone: str | None = None):
     """Mistura o som do sistema (os outros participantes) com o microfone (nós).
 
     Cria um sink virtual no PulseAudio e despeja nele o 'monitor' da saída de
@@ -100,7 +107,8 @@ def capturar_sistema():
     """
     if not shutil.which("pactl"):
         sys.exit("Erro: o pactl não está instalado (sudo apt install pulseaudio-utils).")
-    colunas, microfone = pactl("get-default-sink"), pactl("get-default-source")
+    colunas = pactl("get-default-sink")
+    microfone = microfone or pactl("get-default-source")
     modulos = []
     try:
         modulos.append(pactl("load-module", "module-null-sink", "sink_name=reuniao_mix",
@@ -362,18 +370,23 @@ def main():
     args = parser.parse_args()
 
     if args.comando in (None, "gui"):
-        import interface                           # só aqui, para o CLI não carregar o Tk
-        interface.main()
+        # A interface usa o GTK do sistema (python3-gi), que não está no .venv.
+        os.execv("/usr/bin/python3", ["python3", str(Path(__file__).with_name("interface.py"))])
     elif args.comando == "microfones":
         listar_dispositivos()
     elif args.comando == "gravar":
         pasta = nova_pasta(args.saida, args.titulo)
         disp = int(args.dispositivo) if args.dispositivo and args.dispositivo.isdigit() \
             else args.dispositivo
+        # --dispositivo também aceita o nome de uma fonte do PulseAudio (é o que a interface usa)
+        fonte = disp if isinstance(disp, str) and disp in fontes_pulse() else None
         if args.meet:
-            # grava do sink misturado através do PulseAudio (ignora --dispositivo)
-            with capturar_sistema():
+            # grava do sink misturado através do PulseAudio
+            with capturar_sistema(fonte):
                 wav = gravar(pasta / "audio.wav", "pulse")
+        elif fonte:
+            os.environ["PULSE_SOURCE"] = fonte
+            wav = gravar(pasta / "audio.wav", "pulse")
         else:
             wav = gravar(pasta / "audio.wav", disp)
         processar_audio(wav, pasta, args)
