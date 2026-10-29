@@ -176,10 +176,21 @@ class Janela(Gtk.ApplicationWindow):
         self.botao_audio.set_image(Gtk.Image.new_from_icon_name(
             "media-playback-start-symbolic", Gtk.IconSize.BUTTON))
         self.botao_audio.connect("clicked", lambda *_: self.abrir_ficheiro("audio.wav"))
+        self.botao_copiar = Gtk.Button(label="Copiar", always_show_image=True,
+                                       tooltip_text="Copiar o texto mostrado no painel",
+                                       sensitive=False)
+        self.botao_copiar.set_image(Gtk.Image.new_from_icon_name(
+            "edit-copy-symbolic", Gtk.IconSize.BUTTON))
+        self.botao_copiar.connect("clicked", lambda *_: self.copiar())
         self.resultados.pack_start(vistas, False, False, 0)
+        self.resultados.pack_start(self.botao_copiar, False, False, 0)
         self.resultados.pack_start(self.botao_audio, False, False, 0)
-        for filho in (vistas, self.vista_resumo, self.vista_transcricao, self.botao_audio):
+        for filho in (vistas, self.vista_resumo, self.vista_transcricao, self.botao_copiar,
+                      self.botao_audio):
             filho.show()
+        # Só há o que copiar quando o painel mostra o resumo ou a transcrição, não o registo.
+        self.vista_registo.connect(
+            "toggled", lambda b: self.botao_copiar.set_sensitive(not b.get_active()))
         corpo.pack_start(self.resultados, False, False, 0)
 
         # Registo do processo e, no fim, o ficheiro escolhido
@@ -412,6 +423,24 @@ class Janela(Gtk.ApplicationWindow):
         self.ultima_substituivel = False
         buffer.place_cursor(buffer.get_start_iter())
         self.texto.scroll_to_iter(buffer.get_start_iter(), 0, False, 0, 0)
+
+    def copiar(self):
+        """Copia para a área de transferência o ficheiro que está no painel."""
+        buffer = self.texto.get_buffer()
+        conteudo = buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), False)
+        area = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+        area.set_text(conteudo, -1)
+        area.store()                          # fica disponível mesmo depois de fechar a janela
+        self.botao_copiar.set_label("Copiado")
+        self.botao_copiar.get_image().set_from_icon_name("object-select-symbolic",
+                                                         Gtk.IconSize.BUTTON)
+        GLib.timeout_add(1500, self.repor_copiar)
+
+    def repor_copiar(self) -> bool:
+        self.botao_copiar.set_label("Copiar")
+        self.botao_copiar.get_image().set_from_icon_name("edit-copy-symbolic",
+                                                         Gtk.IconSize.BUTTON)
+        return False
 
     def abrir_ficheiro(self, nome: str):
         """Abre um ficheiro da reunião na aplicação predefinida do sistema."""
