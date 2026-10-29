@@ -159,7 +159,30 @@ class Janela(Gtk.ApplicationWindow):
         self.estado.get_style_context().add_class("dim-label")
         corpo.pack_start(self.estado, False, False, 0)
 
-        # Registo do processo e, no fim, o resumo
+        # No fim: que ficheiro se vê no painel (Resumo | Transcrição) e o botão do áudio.
+        # O rádio "registo" não aparece; serve para nenhum dos dois ficar selecionado
+        # enquanto o painel mostra a saída do processo.
+        self.resultados = Gtk.Box(spacing=12, halign=Gtk.Align.CENTER, no_show_all=True)
+        vistas = Gtk.Box()
+        vistas.get_style_context().add_class("linked")
+        self.vista_registo = Gtk.RadioButton()
+        self.vista_resumo = self.botao_vista("Resumo", "view-list-symbolic", "resumo.md")
+        self.vista_transcricao = self.botao_vista("Transcrição", "text-x-generic-symbolic",
+                                                  "transcricao.txt")
+        vistas.pack_start(self.vista_resumo, False, False, 0)
+        vistas.pack_start(self.vista_transcricao, False, False, 0)
+        self.botao_audio = Gtk.Button(label="Áudio", always_show_image=True,
+                                      tooltip_text="Ouvir a gravação no leitor do sistema")
+        self.botao_audio.set_image(Gtk.Image.new_from_icon_name(
+            "media-playback-start-symbolic", Gtk.IconSize.BUTTON))
+        self.botao_audio.connect("clicked", lambda *_: self.abrir_ficheiro("audio.wav"))
+        self.resultados.pack_start(vistas, False, False, 0)
+        self.resultados.pack_start(self.botao_audio, False, False, 0)
+        for filho in (vistas, self.vista_resumo, self.vista_transcricao, self.botao_audio):
+            filho.show()
+        corpo.pack_start(self.resultados, False, False, 0)
+
+        # Registo do processo e, no fim, o ficheiro escolhido
         self.texto = Gtk.TextView(editable=False, cursor_visible=False, monospace=True,
                                   wrap_mode=Gtk.WrapMode.WORD_CHAR, left_margin=10,
                                   right_margin=10, top_margin=8, bottom_margin=8)
@@ -173,6 +196,13 @@ class Janela(Gtk.ApplicationWindow):
         self.radio_online.set_active(prefs.get("modo") == "online")
         self.radio_vivo.connect("toggled", lambda *_: self.atualizar_modo())
         self.atualizar_modo()
+
+    def botao_vista(self, rotulo: str, icone: str, ficheiro: str) -> Gtk.RadioButton:
+        botao = Gtk.RadioButton(label=rotulo, group=self.vista_registo, draw_indicator=False,
+                                always_show_image=True)
+        botao.set_image(Gtk.Image.new_from_icon_name(icone, Gtk.IconSize.BUTTON))
+        botao.connect("toggled", lambda b: b.get_active() and self.mostrar_ficheiro(ficheiro))
+        return botao
 
     @staticmethod
     def separador(linha: Gtk.ListBoxRow, anterior: Gtk.ListBoxRow | None):
@@ -249,6 +279,9 @@ class Janela(Gtk.ApplicationWindow):
     def iniciar(self):
         self.guardar_preferencias()
         self.pasta, self.erro, self.gravacao_fechada = None, "", False
+        self.resultados.hide()
+        self.vista_registo.set_active(True)
+        self.texto.set_monospace(True)
         self.texto.get_buffer().set_text("")
         self.ultima_substituivel = False
         self.botao_pasta.set_sensitive(False)
@@ -341,15 +374,50 @@ class Janela(Gtk.ApplicationWindow):
         self.bloquear_opcoes(False)
         self.definir_botao("iniciar")
         self.botao_pasta.set_sensitive(bool(self.pasta))
+        self.mostrar_resultados()
         if codigo == 0:
-            self.definir_estado("Concluído", f"Ficheiros em {self.pasta}")
+            self.definir_estado("Concluído")
+            if self.vista_resumo.get_sensitive():
+                self.vista_resumo.set_active(True)        # limpa o registo e mostra o resumo
             self.notificar("Resumo pronto", Path(self.pasta).name if self.pasta else "")
         else:
+            # O registo fica no painel: é ele que explica o que falhou.
             detalhe = self.erro or "Vê os detalhes no registo."
             self.definir_estado("Falhou", detalhe)
             self.notificar("A reunião não foi processada", detalhe)
             self.mensagem(Gtk.MessageType.ERROR, "A reunião não foi processada", detalhe)
         return False
+
+    def mostrar_resultados(self):
+        """Mostra os botões dos ficheiros gerados, ativos só os que existem."""
+        if not self.pasta:
+            return
+        pasta = Path(self.pasta)
+        self.vista_resumo.set_sensitive((pasta / "resumo.md").exists())
+        self.vista_transcricao.set_sensitive((pasta / "transcricao.txt").exists())
+        self.botao_audio.set_sensitive((pasta / "audio.wav").exists())
+        self.resultados.show()
+
+    def mostrar_ficheiro(self, nome: str):
+        """Substitui o conteúdo do painel pelo ficheiro da reunião."""
+        try:
+            conteudo = (Path(self.pasta) / nome).read_text(encoding="utf-8")
+        except (OSError, TypeError):
+            conteudo = f"Não foi possível abrir {nome}."
+        # A transcrição tem [mm:ss] no início das linhas, que ficam alinhados em monospace;
+        # o resumo é prosa e lê-se melhor na fonte do sistema.
+        self.texto.set_monospace(nome == "transcricao.txt")
+        buffer = self.texto.get_buffer()
+        buffer.set_text(conteudo.rstrip() + "\n")
+        self.ultima_substituivel = False
+        buffer.place_cursor(buffer.get_start_iter())
+        self.texto.scroll_to_iter(buffer.get_start_iter(), 0, False, 0, 0)
+
+    def abrir_ficheiro(self, nome: str):
+        """Abre um ficheiro da reunião na aplicação predefinida do sistema."""
+        if self.pasta:
+            Gtk.show_uri_on_window(self, (Path(self.pasta) / nome).as_uri(),
+                                   Gtk.get_current_event_time())
 
     def abrir_pasta(self):
         if self.pasta:
