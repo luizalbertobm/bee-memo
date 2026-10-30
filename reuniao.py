@@ -895,7 +895,8 @@ def texto_organizado(temas: list[tuple[str, list[dict]]], fora: list[dict],
               + "\n\n".join(sem_factos_repetidos(s["texto"]) for s in secs)
               for i, (titulo, secs) in enumerate(temas, 1)]
     partes.append("## Fora dos temas\n" + ("\n".join(f"- {s['titulo']}" for s in fora) or "- (nenhum)"))
-    for rotulo, campo, maximo in (("Decisões registradas", "decisoes", 6),
+    # Com 6, a decisão principal (que costuma surgir a meio da reunião) caía muitas vezes fora.
+    for rotulo, campo, maximo in (("Decisões registradas", "decisoes", 8),
                                   ("Tarefas registradas", "tarefas", 8),
                                   ("Perguntas sem resposta", "abertas", 5)):
         itens = sem_repetidos([item for s in seccoes for item in s[campo]], maximo)
