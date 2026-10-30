@@ -35,10 +35,12 @@ from pathlib import Path
 PASTA_SAIDA = Path.home() / "Reunioes"
 MODELO_WHISPER = "large-v3-turbo"      # GPU: large-v3-turbo | CPU: small ou medium
 IDIOMA = "pt"
-MODELO_OLLAMA = "qwen3:8b"             # alternativas: llama3.1:8b, gemma3:4b
+MODELO_OLLAMA = "qwen3.5:4b"           # alternativas: qwen3:8b, gemma4:e4b (mais pesados)
 OLLAMA_URL = "http://localhost:11434"
 TAXA_AMOSTRAGEM = 16000                # 16 kHz mono é o que o Whisper usa
-TAMANHO_BLOCO = 42000                  # caracteres por chamada ao LLM (~40 min de reunião)
+TAMANHO_BLOCO = 12000                  # caracteres por bloco de extração de notas (~10 min)
+LIMITE_UMA_CHAMADA = 500               # só transcrições minúsculas saem numa só chamada
+LIMITE_NOTAS = 40000                   # notas maiores são condensadas antes do resumo
 
 # Identificação de quem fala (diarização) com sherpa-onnx; os modelos descarregam-se na
 # primeira utilização para PASTA_MODELOS.
@@ -447,50 +449,84 @@ NOTA_COM_ORADORES = (
     "Pessoa 2… —, uma atribuição automática que também pode ter erros. Quando estiver claro, "
     "indique quem propôs, decidiu ou ficou responsável por cada coisa, usando esses rótulos")
 
-PROMPT_RESUMO = """Você é um assistente que escreve atas de reunião. Abaixo está {fonte} de
-uma reunião de {duracao} ({nota_oradores}). Cada linha começa pelo momento da reunião em que
-foi dita, no formato [mm:ss].{instrucao_partes}
+PROMPT_NOTAS = """Abaixo está a parte {n} de {total} da transcrição de uma reunião ({nota_oradores}).
+Cada linha começa pelo momento da reunião em que foi dita, no formato [mm:ss].
 
-Escreva, em português do Brasil, um resumo em Markdown focado nos assuntos mais importantes,
-com exatamente esta estrutura:
+Sua tarefa é EXTRAIR, não resumir. Divida o trecho em 3 a 6 assuntos (um assunto dura em
+geral vários minutos; não crie um assunto por frase) e liste-os, em português do Brasil e em
+ordem cronológica, neste formato:
+
+### <nome do assunto, de 3 a 8 palavras> (mm:ss–mm:ss)
+- Fatos: até 6 pontos, um por linha, com no máximo 20 palavras cada: toda ferramenta,
+  biblioteca, versão, sistema, número, valor, data e nome citados, com o papel de cada um
+  (por exemplo: "Lombok: anotações que geram getters, setters e construtores no build")
+- Divergências: só se os participantes defenderam coisas diferentes, e quem defendeu o quê
+- Decisões: só escolhas feitas na reunião (entre alternativas, ou "vou manter X", "fica
+  decidido Y"), e quem as fez; descrever como algo já funciona ou já foi feito não é decisão
+- Tarefas: "ação curta, com o verbo no infinitivo — quem — prazo", sem citar a frase dita e
+  sem brincadeiras; o prazo é copiado tal como foi dito (por exemplo "hoje à tarde")
+- Em aberto: só perguntas feitas na reunião que ninguém respondeu
+
+Omita as linhas que ficariam vazias (não escreva "nenhuma"). Inclua também as explicações
+técnicas; ignore apenas cumprimentos, conversa paralela e problemas de áudio; não avalie a
+importância; não copie frases soltas da transcrição; não acrescente nada que não esteja no
+trecho.
+
+TRECHO:
+\"\"\"
+{texto}
+\"\"\"
+"""
+
+PROMPT_RESUMO = """Você é um assistente que escreve atas de reunião. A reunião foi em {data} e
+durou {duracao} ({nota_oradores}). Abaixo estão {fonte}; os tempos [mm:ss] e (mm:ss–mm:ss)
+indicam o momento da reunião.{instrucao_partes}
+
+Escreva, em português do Brasil, um resumo em Markdown com exatamente esta estrutura:
 
 ## Resumo executivo
-(2 a 4 frases: o objetivo da reunião e as principais conclusões)
+(3 a 5 frases: o objetivo da reunião, o resultado principal e o que vem a seguir)
 
 ## Tópicos principais
 (os {n_topicos} assuntos mais importantes, do mais para o menos importante; para cada um:)
 
 ### 1. Título curto do assunto (mm:ss–mm:ss)
-- 2 a 4 pontos com os fatos concretos: números, valores, datas, prazos, nomes de produtos,
-  clientes ou ferramentas
+- um fato concreto por linha, até 8 linhas, sem o prefixo "Fatos:": nomes de ferramentas,
+  bibliotecas, versões, sistemas, números, valores, datas e prazos, exatamente como estão no
+  texto; cada linha começa pelo assunto (a ferramenta, a pessoa, o sistema), nunca por "Foi"
 - **Conclusão:** o que ficou definido, ou a posição de cada participante
 
 ## Decisões
-(lista; escreva "Nenhuma decisão explícita." se não houver)
+(no máximo 6, só as explícitas, com quem decidiu; descrever como algo funciona não é
+decisão. Escreva "Nenhuma decisão explícita." se não houver)
 
 ## Tarefas
-(lista de tarefas combinadas na reunião, uma por linha, com o responsável e o prazo só se
-tiverem sido ditos. Exemplos: "- [ ] Enviar a proposta ao cliente — Pessoa 2 — sexta-feira"
-ou, sem responsável nem prazo, apenas "- [ ] Enviar a proposta ao cliente". Nunca escreva
-"?", "não mencionado" ou campos vazios.)
+(no máximo 8, uma por linha: "- [ ] ação curta, com o verbo no infinitivo — responsável — prazo". Copie o
+responsável e o prazo exatamente como estão no texto, sem os trocar nem completar; só entram
+se tiverem sido ditos. Junte as tarefas repetidas. Nunca acrescente uma hora, um dia da semana
+ou uma data que não esteja no texto; nunca escreva "?", "não mencionado" ou campos vazios.)
 
 ## Questões em aberto
-(dúvidas ou assuntos que os participantes deixaram explicitamente por resolver; omita esta
-seção se não houver. Não invente questões, como a falta de responsável ou de prazo.)
+(só dúvidas que ficaram sem resposta; uma dúvida resolvida na reunião não entra. Omita a
+seção se não houver.)
 
 ## Outros assuntos
-(assuntos menores que NÃO fazem parte dos tópicos principais, uma linha cada; omita esta
-seção se não houver)
+(os assuntos do texto que não entraram em nenhum tópico principal, pelo título, uma linha
+cada e no máximo 5; nunca repita aqui o que já está nos tópicos. Omita a seção se não houver.)
 
-Como decidir o que é importante: o tempo dedicado ao assunto (veja os tempos [mm:ss]), se
-levou a decisões ou tarefas, e o impacto no trabalho. Ignore cumprimentos, conversa paralela
-e a logística da própria gravação.
+Como decidir a importância: o tempo dedicado ao assunto, se levou a decisões ou tarefas, e o
+impacto no trabalho. Cumprimentos, conversa paralela e a logística da gravação não contam.
 
 Regras:
-- use apenas informação que está no texto; não invente nomes, datas, números nem tarefas;
-- mantenha os números e os prazos exatamente como foram ditos;
-- o intervalo (mm:ss–mm:ss) de cada tópico deve vir dos tempos do texto;
-- não repita o mesmo conteúdo em várias seções.
+- cada tópico principal é um tema amplo: junte nele todos os assuntos do texto que lhe
+  pertencem, mesmo que apareçam em momentos diferentes da reunião;
+- todo assunto com conteúdo tem de aparecer, num tópico principal ou em Outros assuntos;
+- o intervalo (mm:ss–mm:ss) de cada tópico vem dos tempos do texto, e os intervalos de
+  tópicos diferentes não se sobrepõem;
+- escreva frases diretas; não use "foi mencionado que" nem "foi discutido que", e não
+  generalize ("seguindo os padrões" não serve: diga quais);
+- não invente nomes, datas, números nem tarefas; não repita o mesmo conteúdo em várias seções;
+- responda só com o Markdown, sem cercas de código.
 
 TEXTO:
 \"\"\"
@@ -499,25 +535,30 @@ TEXTO:
 """
 
 INSTRUCAO_PARTES = """
-O texto são notas tiradas de {total} partes seguidas da reunião. Antes de escolher os assuntos
-mais importantes, junte os que aparecem em mais de uma parte, somando o tempo dedicado a eles."""
+As notas foram extraídas de {total} partes seguidas da reunião. Os tópicos principais já foram
+escolhidos e ordenados; escreva-os exatamente com estes títulos, nesta ordem e com estes
+intervalos, juntando em cada um tudo o que as notas têm sobre ele:
+{estrutura}
+Em "Decisões" entram só as linhas "Decisões" das notas; em "Questões em aberto" só as linhas
+"Em aberto"; em "Tarefas" só as linhas "Tarefas". Uma conclusão de tópico não é uma decisão."""
 
-PROMPT_NOTAS = """Abaixo está a parte {n} de {total} da transcrição de uma reunião
-({nota_oradores}). Cada linha começa pelo momento da reunião em que foi dita, no formato
-[mm:ss].
+PROMPT_ESTRUTURA = """Abaixo estão notas detalhadas, em ordem cronológica, de uma reunião de
+{duracao}, extraídas de {total} partes; os intervalos (mm:ss–mm:ss) indicam o momento da
+reunião.
 
-Liste, em português do Brasil, os assuntos discutidos nesta parte, neste formato:
+Agrupe os assuntos das notas em {n_topicos} temas (nunca menos do que isso) e ordene-os do
+mais importante para o menos importante. Um tema junta assuntos sobre a mesma questão, mesmo
+de partes diferentes, mas tem de ser coeso: não junte assuntos diferentes só porque falam do
+mesmo sistema. Um tema é importante pelo tempo que ocupou, por ter levado a decisões ou
+tarefas e pelo impacto no trabalho; cumprimentos, piadas e logística da gravação não contam
+e não formam temas. Todo assunto com conteúdo tem de pertencer a um tema ou ficar em "Outros".
 
-### Título curto do assunto (mm:ss–mm:ss)
-- fatos concretos: números, valores, datas, prazos, nomes
-- decisões tomadas
-- tarefas: "tarefa — responsável — prazo" (omita o que não tiver sido mencionado)
-- questões que ficaram em aberto
+Responda só com esta lista, em português do Brasil, sem comentários:
+1. Título do tema (mm:ss–mm:ss, mm:ss–mm:ss se tiver mais de um intervalo) — assuntos das notas que ele junta
+2. …
+Outros: títulos dos assuntos que ficaram de fora, separados por ponto e vírgula (ou "nenhum")
 
-Inclua todos os assuntos com conteúdo, mesmo os curtos; ignore cumprimentos e a logística da
-gravação. Use apenas informação que está no texto.
-
-TRECHO:
+NOTAS:
 \"\"\"
 {texto}
 \"\"\"
@@ -585,27 +626,98 @@ def dividir(texto: str, tamanho: int) -> list[str]:
 CAMPO_VAZIO = re.compile(r"^(\?+|-+|n/?a|.*\bn[ãa]o (mencionad|definid|especificad|informad|"
                          r"indicad|atribu[íi]d)\w*.*|.*\bsem (respons[áa]vel|prazo)\b.*|"
                          r"(respons[áa]vel|prazo):?\s*(\?+|-+)?)$", re.I)
-SECOES_OPCIONAIS = ("Questões em aberto", "Outros assuntos")
+SECOES_OPCIONAIS = ("Tarefas", "Questões em aberto", "Outros assuntos")   # somem se vazias
+DIAS_SEMANA = ("segunda", "terça", "quarta", "quinta", "sexta", "sábado", "domingo")
 
 
-def limpar_resumo(resumo: str) -> str:
-    """Tira das tarefas os campos sem informação e omite as seções opcionais vazias —
-    o modelo nem sempre segue essas instruções do prompt."""
-    linhas = []
-    for linha in resumo.splitlines():
+def prazo_inventado(campo: str, conhecido: str, data: dt.date) -> bool:
+    """Um dia da semana ou uma data dd/mm que não está no texto da reunião (nem é a data
+    da reunião ou a semana seguinte) foi inventado pelo modelo."""
+    texto = conhecido.lower()
+    for dia in DIAS_SEMANA:
+        if dia in campo.lower() and dia not in texto:
+            return True
+    for hora in re.findall(r"\b(\d{1,2})\s*(?:h\b|:\d{2}|horas)", campo.lower()):
+        if not re.search(rf"\b{hora}\s*(?:h\b|:\d{{2}}|horas)|\bdas {hora}\b", texto):
+            return True
+    if re.search(r"imediat|urgente|o quanto antes", campo, re.I) and not \
+            re.search(r"imediat|urgente|o quanto antes", texto):
+        return True
+    for d, m in re.findall(r"\b(\d{1,2})/(\d{1,2})\b", campo):
+        if f"{d}/{m}" in texto or f"{int(d):02d}/{int(m):02d}" in texto:
+            continue
+        try:
+            quando = dt.date(data.year, int(m), int(d))
+        except ValueError:
+            return True
+        if not 0 <= (quando - data).days <= 7:
+            return True
+    return False
+
+
+VERBOS_GENERICOS = {"criar", "adicionar", "fazer", "ajustar", "implementar", "configurar",
+                    "colocar", "deixar", "definir", "realizar", "finalizar", "preparar"}
+
+
+def limpar_resumo(resumo: str, conhecido: str = "", data: dt.date | None = None,
+                  omitir: tuple[str, ...] = ()) -> str:
+    """Arruma o que o modelo nem sempre faz apesar do prompt: tira cercas de código à volta
+    da resposta, tarefas repetidas, campos de tarefa sem informação ou com prazos inventados,
+    as seções opcionais vazias e as seções em `omitir` (sem base nas notas)."""
+    texto = resumo.strip()
+    if texto.startswith("```"):
+        texto = texto.split("\n", 1)[1] if "\n" in texto else ""
+        if texto.rstrip().endswith("```"):
+            texto = texto.rstrip()[:-3]
+    # "Foi mencionado que o Lombok…" → "O Lombok…": o modelo insiste nesta muleta
+    texto = re.sub(r"(?im)^(\s*(?:-\s*|\d+\.\s*)?(?:\*\*)?)(?:foi|ficou) (?:mencionad[oa]|"
+                   r"discutid[oa]|decidid[oa]|sugerid[oa]|destacad[oa]|confirmad[oa]|"
+                   r"levantad[oa]|comentad[oa]|definid[oa]|identificad[oa]|acordad[oa])"
+                   r"(?: que)?\s+(\w)",
+                   lambda m: m.group(1) + m.group(2).upper(), texto)
+    linhas, tarefas_vistas, seccao = [], [], ""
+    for linha in texto.splitlines():
+        if linha.startswith("## "):
+            seccao = linha[3:].strip()
+        if seccao == "Tarefas" and re.match(r"\s*[-*]\s+", linha) \
+                and not re.match(r"\s*[-*]\s*(\[ \]\s*)?(nenhum|não )", linha, re.I):
+            # nem sempre vem a caixa "- [ ]" nem o travessão; "Pessoa 1 – ação" passa a
+            # "ação — Pessoa 1"
+            linha = re.sub(r"^\s*[-*]\s+(?!\[)", "- [ ] ", linha)
+            linha = re.sub(r"\s+[–-]\s+", " — ", linha)
+            linha = re.sub(r"^- \[ \] (Pessoa \d+)\s*—\s*(.+?)\s*$", r"- [ ] \2 — \1", linha)
+        elif (seccao == "Tópicos principais" and re.match(r"\s*- (?!\*\*)", linha)
+              and len(linha) > 180 and "; " in linha):
+            # um fato por linha: às vezes vem tudo numa só, separado por ";"
+            linhas.extend("- " + p.strip().rstrip(".")
+                          for p in linha.strip()[2:].split("; ") if p.strip())
+            continue
+        linha = re.sub(r"^(\s*- )<(.+)>\s*$", r"\1\2", linha)     # "<título>" literal
         if re.match(r"\s*- \[ \]", linha):
             tarefa, *campos = [p.strip() for p in linha.rstrip().split(" — ")]
-            linha = " — ".join([tarefa] + [c for c in campos if not CAMPO_VAZIO.match(c)])
+            # tarefas repetidas com outras palavras ("Criar Docker Compose" depois de
+            # "Adicionar o Docker Compose e o Dockerfile"): fica a primeira
+            palavras = {p for p in re.findall(r"\w{4,}", tarefa.lower())} - VERBOS_GENERICOS
+            if palavras and any(palavras <= vista for vista in tarefas_vistas):
+                continue
+            tarefas_vistas.append(palavras)
+            campos = [c for c in campos if not CAMPO_VAZIO.match(c)
+                      and not (data and prazo_inventado(c, conhecido, data))]
+            linha = " — ".join([tarefa] + campos)
         linhas.append(linha)
     secoes = re.split(r"(?m)^(?=## )", "\n".join(linhas))
-    vazia = re.compile(r"^\s*(-\s*)?(nenhum|nenhuma|não há|não houve)\b[^\n]*\s*$", re.I)
+    # "Nenhuma.", "Nenhuma tarefa foi mencionada", "A seção está omitida, pois…"
+    vazia = re.compile(r"^\s*(-\s*)?(nenhum|nenhuma|não há|não houve|não foi|não foram|"
+                       r"a seção|esta seção|seção omitida|sem tarefas|sem questões)\b[^\n]*\s*$",
+                       re.I)
     return "".join(s for s in secoes
-                   if not (s.startswith(tuple(f"## {t}" for t in SECOES_OPCIONAIS))
-                           and vazia.match(s.split("\n", 1)[1] if "\n" in s else ""))).strip()
+                   if not s.startswith(tuple(f"## {t}" for t in omitir))
+                   and not (s.startswith(tuple(f"## {t}" for t in SECOES_OPCIONAIS))
+                            and vazia.match(s.split("\n", 1)[1] if "\n" in s else ""))).strip()
 
 
 def descrever_duracao(segundos_: float) -> tuple[str, str]:
-    """("31 minutos", "3 a 6") — a duração por extenso e quantos tópicos principais pedir."""
+    """("31 minutos", "4 a 7") — a duração por extenso e quantos tópicos principais pedir."""
     minutos = round(segundos_ / 60)
     if minutos < 1:
         duracao = "menos de 1 minuto"
@@ -613,39 +725,241 @@ def descrever_duracao(segundos_: float) -> tuple[str, str]:
         duracao = f"{minutos} minuto{'s' if minutos > 1 else ''}"
     else:
         duracao = f"{minutos // 60} h {minutos % 60:02d} min"
-    topicos = "2 a 4" if minutos <= 10 else "3 a 6" if minutos <= 45 else "4 a 8"
+    topicos = "2 a 4" if minutos <= 10 else "3 a 5" if minutos <= 20 else "4 a 7"
     return duracao, topicos
 
 
-def resumir(texto: str, modelo: str, url: str, duracao_s: float) -> str:
+def data_de(caminho: Path) -> dt.date:
+    """Data da reunião: AAAA-MM-DD no nome do ficheiro/pasta ou, na falta, a data do ficheiro."""
+    # A pasta de uma reunião chama-se "<data do processamento>_<hora>_<título>", e o título
+    # pode trazer a data original do ficheiro; por isso vale a última data encontrada.
+    datas = re.findall(r"(20\d\d)-(\d\d)-(\d\d)", caminho.name)
+    if datas:
+        with contextlib.suppress(ValueError):
+            return dt.date(*map(int, datas[-1]))
+    if caminho.exists():
+        return dt.date.fromtimestamp(caminho.stat().st_mtime)
+    return dt.date.today()
+
+
+def descrever_data(data: dt.date) -> str:
+    dias = ("segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira",
+            "sábado", "domingo")
+    return f"{data:%d/%m/%Y} ({dias[data.weekday()]})"
+
+
+PROMPT_SINTESE = """Você é um assistente que escreve atas de reunião. A reunião foi em {data} e
+durou {duracao} ({nota_oradores}). Abaixo estão as notas da reunião, já organizadas por tema
+e por ordem de importância; os tempos (mm:ss–mm:ss) indicam o momento da reunião.
+
+Escreva, em português do Brasil, um resumo em Markdown com exatamente esta estrutura:
+
+## Resumo executivo
+(3 a 5 frases: o objetivo da reunião, o resultado principal e o que vem a seguir)
+
+## Tópicos principais
+(um tópico por tema, com os títulos, a ordem e os intervalos dados; para cada um:)
+
+### 1. Título do tema (mm:ss–mm:ss)
+- um fato concreto por linha, até 8 linhas, só com o que está nas notas desse tema: nomes de
+  ferramentas, bibliotecas, versões, sistemas, números, valores, datas e prazos, exatamente
+  como estão nas notas; cada linha começa pelo assunto (a ferramenta, a pessoa, o sistema),
+  nunca por "Foi"
+- **Conclusão:** o que ficou definido, ou a posição de cada participante
+
+## Decisões
+(reescreva a lista "Decisões registradas" dada abaixo, sem acrescentar nada e juntando as
+repetidas; escreva "Nenhuma decisão explícita." se a lista estiver vazia)
+
+## Tarefas
+(reescreva a lista "Tarefas registradas", uma por linha: "- [ ] ação curta, com o verbo no
+infinitivo — responsável — prazo", copiando o responsável e o prazo exatamente como estão e
+juntando as repetidas; nunca acrescente uma hora, um dia da semana ou uma data)
+
+## Questões em aberto
+(reescreva a lista "Perguntas sem resposta"; omita a seção se a lista estiver vazia)
+
+## Outros assuntos
+(os títulos da lista "Fora dos temas", uma linha cada; omita a seção se a lista estiver vazia)
+
+Regras: não repita um fato em dois tópicos; escreva frases diretas, sem "foi mencionado que"
+nem "foi discutido que"; não invente nomes, datas, números nem tarefas; responda só com o
+Markdown, sem cercas de código.
+
+NOTAS:
+\"\"\"
+{texto}
+\"\"\"
+"""
+
+
+def seccoes_das_notas(notas: list[str]) -> list[dict]:
+    """Parte as notas pelos cabeçalhos "### Assunto (mm:ss–mm:ss)" em
+    {titulo, inicio, fim, texto, decisoes, tarefas, abertas}."""
+    seccoes = []
+    for nota in notas:
+        for bloco in re.split(r"(?m)^(?=### )", nota):
+            if not bloco.startswith("### "):
+                continue
+            cabecalho, _, corpo = bloco.partition("\n")
+            tempos = re.search(r"(\d{1,2}:\d{2}(?::\d{2})?)\s*[–-]\s*(\d{1,2}:\d{2}(?::\d{2})?)",
+                               cabecalho)
+            titulo = re.sub(r"[\[\(]?\d{1,2}:\d{2}(?::\d{2})?\s*[–-]\s*\d{1,2}:\d{2}(?::\d{2})?[\]\)]?",
+                            "", cabecalho[4:]).strip(" -–:")
+            campos: dict[str, list[str]] = {"decisoes": [], "tarefas": [], "abertas": []}
+            atual = None
+            for linha in corpo.splitlines():
+                campo = re.match(r"\s*-\s*(Fatos|Divergências|Decisões|Tarefas|Em aberto):\s*(.*)",
+                                 linha, re.I)
+                if campo:
+                    atual = {"decisões": "decisoes", "tarefas": "tarefas",
+                             "em aberto": "abertas"}.get(campo[1].lower())
+                    if atual and campo[2].strip():
+                        campos[atual].append(campo[2].strip())
+                elif atual and re.match(r"\s+-\s*\S", linha):
+                    campos[atual].append(linha.strip()[1:].strip())
+            # "Não há dúvidas", "nenhuma" — o modelo nem sempre omite as linhas vazias
+            for campo in campos:
+                campos[campo] = [i for i in campos[campo]
+                                 if not re.match(r"(n[ãa]o h[áa]|nenhum)", i, re.I)]
+            seccoes.append({"titulo": titulo or "Assunto",
+                            "inicio": segundos(tempos[1]) if tempos else None,
+                            "fim": segundos(tempos[2]) if tempos else None,
+                            "texto": bloco.strip(), **campos})
+    return seccoes
+
+
+def organizar_notas(estrutura: str, seccoes: list[dict]) -> tuple[list[tuple[str, list[dict]]],
+                                                                   list[dict]]:
+    """Lê a estrutura ("1. Tema (mm:ss–mm:ss, …) — …") e distribui cada secção das notas pelo
+    primeiro tema cujo intervalo a contém. Devolve [(título do tema, secções)] e as secções
+    que ficaram fora."""
+    temas = []
+    for linha in estrutura.splitlines():
+        tema = re.match(r"\s*\d+[.)]\s*(.+?)\s*\(([^)]*\d[^)]*)\)", linha)
+        if not tema:
+            continue
+        intervalos = [(segundos(a), segundos(b)) for a, b in
+                      re.findall(r"(\d{1,2}:\d{2}(?::\d{2})?)\s*[–-]\s*(\d{1,2}:\d{2}(?::\d{2})?)",
+                                 tema[2])]
+        temas.append((tema[1].strip(), intervalos, []))
+    fora = []
+    for s in seccoes:
+        meio = (s["inicio"] + s["fim"]) / 2 if s["inicio"] is not None else None
+        destino = next((t for t in temas if meio is not None
+                        and any(a <= meio <= b for a, b in t[1])), None)
+        (destino[2] if destino else fora).append(s)
+    return [(titulo, secs) for titulo, _, secs in temas if secs], fora
+
+
+def sem_repetidos(itens: list[str], maximo: int) -> list[str]:
+    """Tira itens cujas palavras de conteúdo já estão todas num item anterior, e limita."""
+    vistos: list[set[str]] = []
+    resultado = []
+    for item in itens:
+        palavras = set(re.findall(r"\w{4,}", item.lower())) - VERBOS_GENERICOS
+        if palavras and any(palavras <= v for v in vistos):
+            continue
+        vistos.append(palavras)
+        resultado.append(item)
+    return resultado[:maximo]
+
+
+def texto_organizado(temas: list[tuple[str, list[dict]]], fora: list[dict],
+                     seccoes: list[dict]) -> str:
+    def intervalo(secs):
+        tempos = [(s["inicio"], s["fim"]) for s in secs if s["inicio"] is not None]
+        return (f"{formatar_tempo(min(a for a, _ in tempos))}–"
+                f"{formatar_tempo(max(b for _, b in tempos))}") if tempos else ""
+
+    vistas: set[str] = set()
+
+    def sem_factos_repetidos(texto: str) -> str:
+        # o mesmo fato extraído em duas secções só fica na primeira
+        linhas = []
+        for linha in texto.splitlines():
+            chave = re.sub(r"\W+", " ", linha.lower()).strip()
+            if re.match(r"\s+-\s", linha) and chave in vistas:
+                continue
+            vistas.add(chave)
+            linhas.append(linha)
+        return "\n".join(linhas)
+
+    partes = [f"## Tema {i}: {titulo} ({intervalo(secs)})\n\n"
+              + "\n\n".join(sem_factos_repetidos(s["texto"]) for s in secs)
+              for i, (titulo, secs) in enumerate(temas, 1)]
+    partes.append("## Fora dos temas\n" + ("\n".join(f"- {s['titulo']}" for s in fora) or "- (nenhum)"))
+    for rotulo, campo, maximo in (("Decisões registradas", "decisoes", 6),
+                                  ("Tarefas registradas", "tarefas", 8),
+                                  ("Perguntas sem resposta", "abertas", 5)):
+        itens = sem_repetidos([item for s in seccoes for item in s[campo]], maximo)
+        partes.append(f"## {rotulo}\n" + ("\n".join(f"- {i}" for i in itens) or "- (nenhuma)"))
+    return "\n\n".join(partes)
+
+
+def resumir(texto: str, modelo: str, url: str, duracao_s: float,
+            data: dt.date | None = None) -> str:
+    """Até ~5 min de fala, uma só chamada sobre a transcrição. Acima disso, em três passos:
+    1) extrair notas detalhadas de cada bloco de ~10 min (onde o modelo não perde pormenores);
+    2) escolher e ordenar os temas a partir das notas (um passo à parte, senão o modelo segue
+       a ordem cronológica e deixa o fim da reunião de fora);
+    3) escrever o resumo a partir das notas já agrupadas por tema."""
     if not texto.strip():
         return "_A transcrição está vazia — não foi detectada fala no áudio._"
+    data = data or dt.date.today()
     nota = NOTA_COM_ORADORES if re.search(r"^(?:\[[\d:]+\] )?Pessoa \d+: ", texto, re.M) \
         else NOTA_SEM_ORADORES
     duracao, n_topicos = descrever_duracao(duracao_s)
-    # Até ~40 min a reunião inteira cabe numa só chamada, e o modelo vê tudo para priorizar.
-    blocos = dividir(texto, TAMANHO_BLOCO)
-    print(f"🤖 A gerar resumo com '{modelo}'"
-          + (f" (reunião longa: {len(blocos)} partes)..." if len(blocos) > 1 else "..."))
     cortes = []
-    fonte, instrucao_partes = "a transcrição automática", ""
-    if len(blocos) > 1:
-        # Reuniões longas: primeiro tira notas de cada parte, depois junta tudo.
+
+    def chamar(prompt: str, **extra) -> str:
+        resposta, cortado = ollama(prompt, modelo, url, **extra)
+        cortes.append(cortado)
+        return resposta
+
+    comuns = dict(duracao=duracao, data=descrever_data(data), nota_oradores=nota)
+    omitir: list[str] = []
+    if len(texto) <= LIMITE_UMA_CHAMADA:
+        print(f"🤖 A gerar resumo com '{modelo}'...")
+        resumo = chamar(PROMPT_RESUMO.format(fonte="a transcrição automática",
+                                             instrucao_partes="", n_topicos=n_topicos,
+                                             texto=texto, **comuns), descarregar=True)
+    else:
+        blocos = dividir(texto, TAMANHO_BLOCO)
+        print(f"🤖 A gerar resumo com '{modelo}' ({len(blocos)} partes)...")
         notas = []
         for i, bloco in enumerate(blocos, 1):
             print(f"    parte {i}/{len(blocos)}")
-            resposta, cortado = ollama(PROMPT_NOTAS.format(
-                n=i, total=len(blocos), texto=bloco, nota_oradores=nota), modelo, url)
-            notas.append(f"## Parte {i}\n{resposta}")
-            cortes.append(cortado)
-        texto = "\n\n".join(notas)
-        fonte = "as notas"
-        instrucao_partes = INSTRUCAO_PARTES.format(total=len(blocos))
-    resumo, cortado = ollama(PROMPT_RESUMO.format(
-        fonte=fonte, duracao=duracao, nota_oradores=nota, instrucao_partes=instrucao_partes,
-        n_topicos=n_topicos, texto=texto), modelo, url, descarregar=True)
-    resumo = limpar_resumo(resumo)
-    if cortado or any(cortes):
+            notas.append(chamar(PROMPT_NOTAS.format(n=i, total=len(blocos), texto=bloco,
+                                                    nota_oradores=nota)))
+        # Reuniões de várias horas: as notas podem não caber; condensam-se em metades.
+        for _ in range(2):
+            if sum(map(len, notas)) <= LIMITE_NOTAS or len(notas) < 2:
+                break
+            print(f"    a condensar {len(notas)} partes de notas")
+            metade = (len(notas) + 1) // 2
+            notas = [chamar(PROMPT_NOTAS.format(n=i, total=2, texto="\n\n".join(grupo),
+                                                nota_oradores=nota))
+                     for i, grupo in enumerate((notas[:metade], notas[metade:]), 1) if grupo]
+        # "Em aberto: não há dúvidas" é o modelo a não obedecer ao "omita a linha".
+        notas = [re.sub(r"(?im)^\s*-\s*(em aberto|decisões|tarefas):.*\b(n[ãa]o h[áa]|nenhum)\b.*\n?",
+                        "", n) for n in notas]
+        texto_notas = "\n\n".join(f"## Parte {i}\n{n}" for i, n in enumerate(notas, 1))
+        print("    a organizar os temas")
+        estrutura = chamar(PROMPT_ESTRUTURA.format(duracao=duracao, total=len(blocos),
+                                                   n_topicos=n_topicos, texto=texto_notas))
+        seccoes = seccoes_das_notas(notas)
+        temas, fora = organizar_notas(estrutura, seccoes)
+        if temas:
+            texto_notas = texto_organizado(temas, fora, seccoes)
+        if not any(s["abertas"] for s in seccoes):
+            omitir.append("Questões em aberto")
+        if temas and not fora:
+            omitir.append("Outros assuntos")
+        print("    a escrever o resumo")
+        resumo = chamar(PROMPT_SINTESE.format(texto=texto_notas, **comuns), descarregar=True)
+    resumo = limpar_resumo(resumo, conhecido=texto, data=data, omitir=tuple(omitir))
+    if any(cortes):
         resumo += ("\n\n> ⚠️ A transcrição não coube toda no modelo de linguagem; "
                    "este resumo pode estar incompleto.")
     return resumo
@@ -681,10 +995,12 @@ def processar_audio(wav: Path, pasta: Path, args) -> None:
 
 
 def gerar_resumo(texto: str, duracao_s: float, pasta: Path, args) -> None:
-    resumo = resumir(texto, args.modelo, args.ollama_url, duracao_s)
-    data = dt.datetime.now().strftime("%d/%m/%Y %H:%M")
+    data = getattr(args, "data_reuniao", None) or data_de(pasta)
+    resumo = resumir(texto, args.modelo, args.ollama_url, duracao_s, data)
+    agora = dt.datetime.now().strftime("%d/%m/%Y %H:%M")
     (pasta / "resumo.md").write_text(
-        f"# Reunião — {args.titulo or pasta.name}\n\n_Gerado em {data}_\n\n{resumo}\n",
+        f"# Reunião — {args.titulo or pasta.name}\n\n"
+        f"_Reunião de {descrever_data(data)}; resumo gerado em {agora}_\n\n{resumo}\n",
         encoding="utf-8")
     print("\n" + "=" * 70 + "\n" + resumo + "\n" + "=" * 70)
     print(f"\n📁 Ficheiros em: {pasta}")
@@ -758,6 +1074,7 @@ def main():
     elif args.comando == "microfones":
         listar_dispositivos()
     elif args.comando == "gravar":
+        args.data_reuniao = dt.date.today()
         pasta = nova_pasta(args.saida, args.titulo)
         disp = int(args.dispositivo) if args.dispositivo and args.dispositivo.isdigit() \
             else args.dispositivo
@@ -776,6 +1093,7 @@ def main():
     elif args.comando == "processar":
         if not args.audio.exists():
             sys.exit(f"Erro: ficheiro não encontrado: {args.audio}")
+        args.data_reuniao = data_de(args.audio)      # do nome (AAAA-MM-DD) ou da data do ficheiro
         pasta = nova_pasta(args.saida, args.titulo or args.audio.stem)
         print(f"🎧 A converter {args.audio.name} para {pasta / 'audio.wav'}")
         wav = para_wav(args.audio, pasta / "audio.wav")
@@ -791,6 +1109,7 @@ def main():
                 segmentos.append({"inicio": inicio, "texto": partes[3],
                                   **({"orador": partes[2]} if partes[2] else {})})
         duracao = segmentos[-1]["inicio"] if segmentos else 0
+        args.data_reuniao = data_de(args.transcricao.parent)
         gerar_resumo(texto_para_resumo(segmentos), duracao, args.transcricao.parent, args)
 
 

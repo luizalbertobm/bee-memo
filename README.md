@@ -11,7 +11,7 @@ computador**: é gratuita, funciona sem internet depois de instalada e o áudio 
 | Conversão   | `ffmpeg` (para ficheiros: opus, mp3, wav, m4a, vídeo…)        |
 | Transcrição | `faster-whisper`, modelo `large-v3-turbo` na GPU              |
 | Quem fala   | `sherpa-onnx` (segmentação pyannote + vozes WeSpeaker), na GPU ou no CPU, em paralelo com a transcrição |
-| Resumo      | Ollama (em Docker) com o modelo `qwen3:8b`                    |
+| Resumo      | Ollama (em Docker) com o modelo `qwen3.5:4b`                    |
 | Interface   | GTK 3 (segue o tema do sistema)                               |
 
 ## Instalação (uma vez)
@@ -31,7 +31,7 @@ O instalador:
 - cria o ambiente Python em `.venv`;
 - com GPU NVIDIA, instala as bibliotecas CUDA, a versão CUDA do `sherpa-onnx` (identificação
   de quem fala na GPU) e o `nvidia-container-toolkit`, para o Ollama usar a GPU dentro do Docker;
-- arranca o Ollama no contentor `reuniao-ollama` e descarrega o modelo `qwen3:8b`;
+- arranca o Ollama no contentor `reuniao-ollama` e descarrega o modelo `qwen3.5:4b`;
 - cria o comando `reuniao` em `~/.local/bin` e o atalho **Reunião Local** no menu de aplicações.
 
 Na primeira transcrição, o modelo Whisper (~1,6 GB) é descarregado automaticamente, e na
@@ -137,9 +137,14 @@ Objetivo da reunião e principais conclusões, em 2 a 4 frases.
   até 10 min, 3 a 6 até 45 min, 4 a 8 acima disso.
 - Cada tópico indica o intervalo da reunião em que foi discutido, para o encontrar na
   transcrição.
-- Até cerca de **40 minutos**, a reunião inteira é resumida de uma só vez, com tudo à vista
-  do modelo. Reuniões mais longas são divididas em partes: primeiro tiram-se notas de cada
-  parte, e o resumo final junta os assuntos que aparecem em várias.
+- Até cerca de **5 minutos**, a reunião é resumida de uma só vez. Acima disso são três
+  passos, porque um modelo pequeno não consegue ao mesmo tempo reter os detalhes de 30
+  minutos e escolher o que importa: (1) extrai notas detalhadas de cada bloco de ~10 min —
+  ferramentas, versões, números, decisões, tarefas com o prazo tal como foi dito; (2) escolhe
+  e ordena os temas a partir das notas; (3) escreve o resumo com as notas já agrupadas por
+  tema. Reuniões de várias horas têm as notas condensadas antes do último passo.
+- O cabeçalho indica a data da reunião (tirada do nome do ficheiro, se tiver `AAAA-MM-DD`,
+  ou da data do ficheiro), e as tarefas mantêm os prazos como foram ditos ("hoje à tarde").
 - Se a transcrição não couber toda no modelo, o resumo termina com um aviso de que pode estar
   incompleto.
 
@@ -211,8 +216,8 @@ Limites:
   menos, é esta etapa que dita o tempo total. A GPU acelera menos aqui do que no Whisper
   porque os modelos são chamados muitas vezes em pedaços pequenos. Desligue-a
   (`--sem-oradores` ou na janela) quando não precisar.
-- Resumo: entre 30 segundos e 2 minutos, numa só chamada ao modelo até cerca de 40 minutos de
-  reunião.
+- Resumo: cerca de 2 minutos para uma reunião de 30 minutos com o `qwen3.5:4b` (o
+  `qwen3:8b`, que pode usar com `--modelo`, é 3× mais lento e não resume melhor).
 - O Whisper e o Ollama usam a GPU um de cada vez: o Whisper é libertado antes do resumo e o
   Ollama descarrega o modelo logo a seguir, por isso os 8 GB de VRAM chegam.
 

@@ -3,7 +3,7 @@
 # O Ollama corre em Docker, por isso o Docker tem de estar instalado.
 set -e
 cd "$(dirname "$0")"
-MODELO="qwen3:8b"
+MODELO="qwen3.5:4b"
 # Versão CUDA do sherpa-onnx (identificação de quem fala na GPU); a versão tem de ser a
 # mesma do requirements.txt e compilada para CUDA 12 + cuDNN 9, como o Whisper.
 SHERPA_CUDA="https://huggingface.co/csukuangfj2/sherpa-onnx-wheels/resolve/main/cuda/2.0.1/sherpa_onnx-2.0.1+cuda12.cudnn9.onnxruntime1.28.2-cp310-cp310-linux_x86_64.whl"
