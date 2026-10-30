@@ -566,6 +566,9 @@ NOTAS:
 
 NUM_CTX = 16384     # contexto do LLM em tokens; mais do que isto já não cabe nos 8 GB de VRAM
 CARACTERES_POR_TOKEN = 3.3       # medido com o qwen3 em transcrições em português
+# Teto de cada resposta. As respostas normais têm 500–1 500 tokens; sem teto, um modelo que
+# entre em ciclo gera até o pedido expirar (aconteceu: 30 min pendurado).
+MAX_RESPOSTA = 3000
 
 
 def ollama(prompt: str, modelo: str, url: str, descarregar: bool = False) -> tuple[str, bool]:
@@ -575,7 +578,7 @@ def ollama(prompt: str, modelo: str, url: str, descarregar: bool = False) -> tup
         "prompt": prompt,
         "stream": False,
         "think": False,                          # desliga o "modo raciocínio" (qwen3, etc.)
-        "options": {"temperature": 0.2, "num_ctx": NUM_CTX},
+        "options": {"temperature": 0.2, "num_ctx": NUM_CTX, "num_predict": MAX_RESPOSTA},
         # Por defeito o Ollama mantém o modelo em VRAM 5 min; na última chamada
         # descarregamo-lo para a GPU ficar livre para o Whisper na próxima reunião.
         "keep_alive": 0 if descarregar else "5m",
@@ -591,6 +594,9 @@ def ollama(prompt: str, modelo: str, url: str, descarregar: bool = False) -> tup
         if cortado:
             print("[aviso] O texto não coube todo no contexto do modelo; "
                   "o resumo pode estar incompleto.")
+        if dados.get("done_reason") == "length":
+            print("[aviso] O modelo atingiu o limite de tamanho da resposta "
+                  "(provavelmente entrou em ciclo); a resposta foi cortada.")
         return dados["response"].strip(), cortado
     except urllib.error.HTTPError as erro:
         detalhe = erro.read().decode(errors="ignore")
