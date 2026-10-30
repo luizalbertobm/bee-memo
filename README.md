@@ -1,9 +1,74 @@
-# Reunião Local
+<div align="center">
 
-Grava reuniões — presenciais ou online (Meet, Teams, Zoom…) — ou processa um áudio que já
-existe, como uma mensagem de voz do WhatsApp, e gera a transcrição — com **quem disse o quê** —
-e um resumo com os pontos principais, as decisões e as tarefas. Corre **toda no seu
-computador**: é gratuita, funciona sem internet depois de instalada e o áudio nunca sai da máquina.
+# 🎙️ Reunião Local
+
+**A ata da sua reunião pronta minutos depois de ela acabar — sem que o áudio saia do seu computador.**
+
+Grave uma reunião presencial ou online, ou largue uma mensagem de voz do WhatsApp, e receba a
+transcrição com **quem disse o quê**, as **decisões**, as **tarefas com responsável e prazo** e
+as **questões em aberto**.
+
+![100% local](https://img.shields.io/badge/100%25-local-2ea44f)
+![Gratuito](https://img.shields.io/badge/custo-gratuito-2ea44f)
+![Sem nuvem](https://img.shields.io/badge/nuvem-nenhuma-blue)
+![Linux](https://img.shields.io/badge/Linux-Ubuntu%20%7C%20Zorin%20%7C%20Debian-orange)
+![GPU NVIDIA](https://img.shields.io/badge/GPU-NVIDIA%20(opcional)-76b900)
+
+</div>
+
+<table>
+  <tr>
+    <td width="50%" align="center"><img src="docs/janela-inicio.png" alt="Janela da Reunião Local antes de gravar: título, modo ao vivo ou online, microfone, GPU e identificação de quem fala"></td>
+    <td width="50%" align="center"><img src="docs/janela-resumo.png" alt="Janela da Reunião Local com o resumo de uma reunião processada"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Escolha o modo e carregue em <b>Iniciar gravação</b></sub></td>
+    <td align="center"><sub>No fim, o resumo aparece na própria janela</sub></td>
+  </tr>
+</table>
+
+## Porquê a Reunião Local?
+
+- 🔒 **Privacidade total.** Transcrição, identificação de vozes e resumo correm no seu
+  computador. Nada é enviado para servidores de terceiros — ideal para reuniões com clientes,
+  RH, saúde ou jurídico.
+- 💸 **Sem assinaturas.** Sem planos, sem limite de minutos, sem conta para criar. Usa só
+  ferramentas e modelos abertos e gratuitos: Whisper, sherpa-onnx e Ollama.
+- 🤝 **Não entra na reunião.** Nada de bots a pedir para participar: grava o som do seu
+  computador e funciona com Meet, Teams, Zoom, Discord ou qualquer outra aplicação.
+- 👥 **Sabe quem disse o quê.** Separa as vozes (Pessoa 1, 2, 3…) e usa isso no resumo para
+  dizer quem decidiu e quem ficou com cada tarefa.
+- ✅ **Uma ata que se usa.** Resumo executivo, tópicos ordenados por importância com o
+  momento da reunião, decisões, tarefas em checklist e o que ficou por responder.
+- ⚡ **Rápida.** Com uma GPU NVIDIA, uma hora de reunião é transcrita em 2 a 4 minutos.
+- 📱 **Também para áudios.** Mensagens de voz do WhatsApp, `.mp3`, `.m4a` e até vídeos:
+  basta arrastá-los para a janela.
+
+## Como funciona
+
+```
+ 🎙️ Gravar  ─────▶  📝 Transcrever  ─────▶  👥 Quem fala  ─────▶  🤖 Resumir
+ microfone e       Whisper large-v3-turbo   vozes separadas      decisões, tarefas,
+ som do sistema    em português             por pessoa           tópicos e prazos
+```
+
+Um exemplo real, gerado pela app a partir de uma reunião fictícia de 4 minutos:
+
+```markdown
+## Tarefas
+- [ ] Preparar calendário das fases — Pessoa 2 — sexta-feira
+- [ ] Enviar rascunho do email e vídeo para revisão — Pessoa 3 — segunda-feira
+- [ ] Levar proposta de orçamento à reunião de direção — Pessoa 1 — quinta-feira
+- [ ] Falar com responsável de vendas — Pessoa 1 — hoje à tarde
+
+## Questões em aberto
+- Preço atual ou aumento na versão 2.
+```
+
+As tarefas só levam responsável e prazo quando foram ditos na reunião: a app filtra os prazos
+que o modelo inventa.
+
+## Tecnologia
 
 | Etapa       | Ferramenta                                                     |
 |-------------|----------------------------------------------------------------|
