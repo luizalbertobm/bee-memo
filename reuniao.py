@@ -37,7 +37,7 @@ IDIOMA = "pt"
 MODELO_OLLAMA = "qwen3:8b"             # alternativas: llama3.1:8b, gemma3:4b
 OLLAMA_URL = "http://localhost:11434"
 TAXA_AMOSTRAGEM = 16000                # 16 kHz mono é o que o Whisper usa
-TAMANHO_BLOCO = 12000                  # caracteres por bloco nas reuniões longas
+TAMANHO_BLOCO = 42000                  # caracteres por chamada ao LLM (~40 min de reunião)
 
 # Identificação de quem fala (diarização) com sherpa-onnx; os modelos descarregam-se na
 # primeira utilização para PASTA_MODELOS.
@@ -45,7 +45,7 @@ PASTA_MODELOS = Path.home() / ".cache" / "reuniao" / "modelos"
 URL_MODELOS = "https://github.com/k2-fsa/sherpa-onnx/releases/download"
 MODELO_SEGMENTACAO = "sherpa-onnx-pyannote-segmentation-3-0"   # onde há fala e mudanças de voz
 MODELO_VOZES = "wespeaker_en_voxceleb_resnet34_LM.onnx"           # "impressão digital" de cada voz
-LIMIAR_ORADORES = 0.5                  # sem --pessoas: mais baixo → separa mais vozes
+LIMIAR_ORADORES = 0.7                  # sem --pessoas: mais baixo → separa mais vozes
 
 
 # ----------------------------------------------------------------------------
@@ -223,16 +223,27 @@ def guardar_transcricao(segmentos: list[dict], pasta: Path) -> str:
 
 
 def texto_para_resumo(segmentos: list[dict]) -> str:
-    """Texto que vai para o LLM: corrido, ou uma linha por vez que alguém fala."""
-    if not any("orador" in s for s in segmentos):
-        return " ".join(s["texto"] for s in segmentos)
-    falas: list[list[str]] = []                       # [orador, texto]
+    """Texto que vai para o LLM, com o momento de cada linha ("[12:30] …"), para o modelo
+    saber quanto tempo se falou de cada assunto: uma linha por vez que alguém fala ou,
+    sem oradores, uma linha a cada ~30 s."""
+    com_oradores = any("orador" in s for s in segmentos)
+    linhas: list[list] = []                            # [início, orador, texto]
     for s in segmentos:
-        if falas and falas[-1][0] == s.get("orador"):
-            falas[-1][1] += " " + s["texto"]
+        if linhas and (s.get("orador") == linhas[-1][1] if com_oradores
+                       else s["inicio"] - linhas[-1][0] < 30):
+            linhas[-1][2] += " " + s["texto"]
         else:
-            falas.append([s.get("orador"), s["texto"]])
-    return "\n".join(f"{orador}: {texto}" if orador else texto for orador, texto in falas)
+            linhas.append([s["inicio"], s.get("orador"), s["texto"]])
+    return "\n".join(f"[{formatar_tempo(inicio)}] " + (f"{orador}: " if orador else "") + texto
+                     for inicio, orador, texto in linhas)
+
+
+def segundos(tempo: str) -> float:
+    """"12:30" ou "1:02:03" → segundos."""
+    total = 0.0
+    for parte in tempo.split(":"):
+        total = total * 60 + float(parte)
+    return total
 
 
 # ----------------------------------------------------------------------------
@@ -355,60 +366,101 @@ def atribuir_oradores(segmentos: list[dict], turnos: list[tuple[float, float, in
 # ----------------------------------------------------------------------------
 # 3. Resumo (LLM local via Ollama)
 # ----------------------------------------------------------------------------
+# Os resumos saem em português do Brasil.
 NOTA_SEM_ORADORES = "pode ter erros de reconhecimento e não identifica quem fala"
 NOTA_COM_ORADORES = (
     "pode ter erros de reconhecimento; cada fala começa por quem a disse — Pessoa 1, "
-    "Pessoa 2… —, uma atribuição automática que também pode ter erros. Quando for claro, "
-    "indica quem propôs, decidiu ou ficou responsável por cada coisa, usando esses rótulos")
+    "Pessoa 2… —, uma atribuição automática que também pode ter erros. Quando estiver claro, "
+    "indique quem propôs, decidiu ou ficou responsável por cada coisa, usando esses rótulos")
 
-PROMPT_RESUMO = """És um assistente que escreve atas de reuniões. Abaixo está a transcrição
-automática de uma reunião ({nota_oradores}).
-Escreve, em português, um resumo em Markdown com exatamente estas secções:
+PROMPT_RESUMO = """Você é um assistente que escreve atas de reunião. Abaixo está {fonte} de
+uma reunião de {duracao} ({nota_oradores}). Cada linha começa pelo momento da reunião em que
+foi dita, no formato [mm:ss].{instrucao_partes}
 
-## Resumo
-(3 a 5 frases sobre o objetivo e o resultado da reunião)
+Escreva, em português do Brasil, um resumo em Markdown focado nos assuntos mais importantes,
+com exatamente esta estrutura:
 
-## Principais pontos discutidos
-(lista de tópicos)
+## Resumo executivo
+(2 a 4 frases: o objetivo da reunião e as principais conclusões)
 
-## Decisões tomadas
-(lista; escreve "Nenhuma decisão explícita." se não houver)
+## Tópicos principais
+(os {n_topicos} assuntos mais importantes, do mais para o menos importante; para cada um:)
 
-## Próximos passos / tarefas
-(lista no formato "- [ ] tarefa — responsável (se for mencionado) — prazo (se for mencionado)")
+### 1. Título curto do assunto (mm:ss–mm:ss)
+- 2 a 4 pontos com os fatos concretos: números, valores, datas, prazos, nomes de produtos,
+  clientes ou ferramentas
+- **Conclusão:** o que ficou definido, ou a posição de cada participante
+
+## Decisões
+(lista; escreva "Nenhuma decisão explícita." se não houver)
+
+## Tarefas
+(lista de tarefas combinadas na reunião, uma por linha, com o responsável e o prazo só se
+tiverem sido ditos. Exemplos: "- [ ] Enviar a proposta ao cliente — Pessoa 2 — sexta-feira"
+ou, sem responsável nem prazo, apenas "- [ ] Enviar a proposta ao cliente". Nunca escreva
+"?", "não mencionado" ou campos vazios.)
 
 ## Questões em aberto
-(lista; escreve "Nenhuma." se não houver)
+(dúvidas ou assuntos que os participantes deixaram explicitamente por resolver; omita esta
+seção se não houver. Não invente questões, como a falta de responsável ou de prazo.)
 
-Regras: usa apenas informação que está na transcrição, não inventes nomes, datas nem números.
-Sê conciso.
+## Outros assuntos
+(assuntos menores que NÃO fazem parte dos tópicos principais, uma linha cada; omita esta
+seção se não houver)
 
-TRANSCRIÇÃO:
+Como decidir o que é importante: o tempo dedicado ao assunto (veja os tempos [mm:ss]), se
+levou a decisões ou tarefas, e o impacto no trabalho. Ignore cumprimentos, conversa paralela
+e a logística da própria gravação.
+
+Regras:
+- use apenas informação que está no texto; não invente nomes, datas, números nem tarefas;
+- mantenha os números e os prazos exatamente como foram ditos;
+- o intervalo (mm:ss–mm:ss) de cada tópico deve vir dos tempos do texto;
+- não repita o mesmo conteúdo em várias seções.
+
+TEXTO:
 \"\"\"
 {texto}
 \"\"\"
 """
 
-PROMPT_NOTAS = """Segue-se um excerto (parte {n} de {total}) da transcrição de uma reunião
-({nota_oradores}).
-Extrai, em português, notas objetivas em tópicos: assuntos discutidos, decisões, tarefas
-(com responsável e prazo, se mencionados), números e datas importantes e questões em aberto.
-Não inventes nada que não esteja no texto.
+INSTRUCAO_PARTES = """
+O texto são notas tiradas de {total} partes seguidas da reunião. Antes de escolher os assuntos
+mais importantes, junte os que aparecem em mais de uma parte, somando o tempo dedicado a eles."""
 
-EXCERTO:
+PROMPT_NOTAS = """Abaixo está a parte {n} de {total} da transcrição de uma reunião
+({nota_oradores}). Cada linha começa pelo momento da reunião em que foi dita, no formato
+[mm:ss].
+
+Liste, em português do Brasil, os assuntos discutidos nesta parte, neste formato:
+
+### Título curto do assunto (mm:ss–mm:ss)
+- fatos concretos: números, valores, datas, prazos, nomes
+- decisões tomadas
+- tarefas: "tarefa — responsável — prazo" (omita o que não tiver sido mencionado)
+- questões que ficaram em aberto
+
+Inclua todos os assuntos com conteúdo, mesmo os curtos; ignore cumprimentos e a logística da
+gravação. Use apenas informação que está no texto.
+
+TRECHO:
 \"\"\"
 {texto}
 \"\"\"
 """
 
+NUM_CTX = 16384     # contexto do LLM em tokens; mais do que isto já não cabe nos 8 GB de VRAM
+CARACTERES_POR_TOKEN = 3.3       # medido com o qwen3 em transcrições em português
 
-def ollama(prompt: str, modelo: str, url: str, descarregar: bool = False) -> str:
+
+def ollama(prompt: str, modelo: str, url: str, descarregar: bool = False) -> tuple[str, bool]:
+    """Devolve a resposta e se o prompt foi cortado por não caber no contexto do modelo."""
     corpo = json.dumps({
         "model": modelo,
         "prompt": prompt,
         "stream": False,
         "think": False,                          # desliga o "modo raciocínio" (qwen3, etc.)
-        "options": {"temperature": 0.2, "num_ctx": 16384},
+        "options": {"temperature": 0.2, "num_ctx": NUM_CTX},
         # Por defeito o Ollama mantém o modelo em VRAM 5 min; na última chamada
         # descarregamo-lo para a GPU ficar livre para o Whisper na próxima reunião.
         "keep_alive": 0 if descarregar else "5m",
@@ -417,7 +469,14 @@ def ollama(prompt: str, modelo: str, url: str, descarregar: bool = False) -> str
                                     headers={"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(pedido, timeout=1800) as resposta:
-            return json.loads(resposta.read())["response"].strip()
+            dados = json.loads(resposta.read())
+        # O Ollama corta em silêncio o que não cabe no contexto, ficando com cerca de metade.
+        # Denuncia-o ter lido muito menos tokens do que o texto tem (~3,3 caracteres por token).
+        cortado = dados.get("prompt_eval_count", 0) < 0.8 * len(prompt) / CARACTERES_POR_TOKEN
+        if cortado:
+            print("[aviso] O texto não coube todo no contexto do modelo; "
+                  "o resumo pode estar incompleto.")
+        return dados["response"].strip(), cortado
     except urllib.error.HTTPError as erro:
         detalhe = erro.read().decode(errors="ignore")
         if "not found" in detalhe:
@@ -435,12 +494,12 @@ def dividir(texto: str, tamanho: int) -> list[str]:
     quem está a falar, para o LLM não perder essa informação."""
     blocos, atual = [], ""
     for linha in texto.splitlines():
-        rotulo = re.match(r"Pessoa \d+: ", linha)
+        # "[12:30] Pessoa 1: " — o que repetir se um bloco começar a meio desta linha
+        rotulo = re.match(r"(?:\[[\d:]+\] )?(?:Pessoa \d+: )?", linha).group(0)
         for frase in re.split(r"(?<=[.?!]) ", linha):
             if len(atual) + len(frase) > tamanho and atual.strip():
                 blocos.append(atual.strip())
-                atual = rotulo.group(0) if rotulo and not frase.startswith(rotulo.group(0)) \
-                    else ""
+                atual = rotulo if rotulo and not frase.startswith(rotulo) else ""
             atual += frase + " "
         atual = atual.rstrip() + "\n"
     if atual.strip():
@@ -448,24 +507,74 @@ def dividir(texto: str, tamanho: int) -> list[str]:
     return blocos
 
 
-def resumir(texto: str, modelo: str, url: str) -> str:
+# Campos de tarefa que o modelo preenche mesmo sem informação ("— prazo não definido", "— ?")
+CAMPO_VAZIO = re.compile(r"^(\?+|-+|n/?a|.*\bn[ãa]o (mencionad|definid|especificad|informad|"
+                         r"indicad|atribu[íi]d)\w*.*|.*\bsem (respons[áa]vel|prazo)\b.*|"
+                         r"(respons[áa]vel|prazo):?\s*(\?+|-+)?)$", re.I)
+SECOES_OPCIONAIS = ("Questões em aberto", "Outros assuntos")
+
+
+def limpar_resumo(resumo: str) -> str:
+    """Tira das tarefas os campos sem informação e omite as seções opcionais vazias —
+    o modelo nem sempre segue essas instruções do prompt."""
+    linhas = []
+    for linha in resumo.splitlines():
+        if re.match(r"\s*- \[ \]", linha):
+            tarefa, *campos = [p.strip() for p in linha.rstrip().split(" — ")]
+            linha = " — ".join([tarefa] + [c for c in campos if not CAMPO_VAZIO.match(c)])
+        linhas.append(linha)
+    secoes = re.split(r"(?m)^(?=## )", "\n".join(linhas))
+    vazia = re.compile(r"^\s*(-\s*)?(nenhum|nenhuma|não há|não houve)\b[^\n]*\s*$", re.I)
+    return "".join(s for s in secoes
+                   if not (s.startswith(tuple(f"## {t}" for t in SECOES_OPCIONAIS))
+                           and vazia.match(s.split("\n", 1)[1] if "\n" in s else ""))).strip()
+
+
+def descrever_duracao(segundos_: float) -> tuple[str, str]:
+    """("31 minutos", "3 a 6") — a duração por extenso e quantos tópicos principais pedir."""
+    minutos = round(segundos_ / 60)
+    if minutos < 1:
+        duracao = "menos de 1 minuto"
+    elif minutos < 60:
+        duracao = f"{minutos} minuto{'s' if minutos > 1 else ''}"
+    else:
+        duracao = f"{minutos // 60} h {minutos % 60:02d} min"
+    topicos = "2 a 4" if minutos <= 10 else "3 a 6" if minutos <= 45 else "4 a 8"
+    return duracao, topicos
+
+
+def resumir(texto: str, modelo: str, url: str, duracao_s: float) -> str:
     if not texto.strip():
-        return "_A transcrição está vazia — não foi detetada fala no áudio._"
-    nota = NOTA_COM_ORADORES if re.search(r"^Pessoa \d+: ", texto, re.M) else NOTA_SEM_ORADORES
+        return "_A transcrição está vazia — não foi detectada fala no áudio._"
+    nota = NOTA_COM_ORADORES if re.search(r"^(?:\[[\d:]+\] )?Pessoa \d+: ", texto, re.M) \
+        else NOTA_SEM_ORADORES
+    duracao, n_topicos = descrever_duracao(duracao_s)
+    # Até ~40 min a reunião inteira cabe numa só chamada, e o modelo vê tudo para priorizar.
     blocos = dividir(texto, TAMANHO_BLOCO)
     print(f"🤖 A gerar resumo com '{modelo}'"
           + (f" (reunião longa: {len(blocos)} partes)..." if len(blocos) > 1 else "..."))
+    cortes = []
+    fonte, instrucao_partes = "a transcrição automática", ""
     if len(blocos) > 1:
         # Reuniões longas: primeiro tira notas de cada parte, depois junta tudo.
         notas = []
         for i, bloco in enumerate(blocos, 1):
             print(f"    parte {i}/{len(blocos)}")
-            notas.append(f"### Parte {i}\n" + ollama(
-                PROMPT_NOTAS.format(n=i, total=len(blocos), texto=bloco, nota_oradores=nota),
-                modelo, url))
+            resposta, cortado = ollama(PROMPT_NOTAS.format(
+                n=i, total=len(blocos), texto=bloco, nota_oradores=nota), modelo, url)
+            notas.append(f"## Parte {i}\n{resposta}")
+            cortes.append(cortado)
         texto = "\n\n".join(notas)
-    return ollama(PROMPT_RESUMO.format(texto=texto, nota_oradores=nota), modelo, url,
-                  descarregar=True)
+        fonte = "as notas"
+        instrucao_partes = INSTRUCAO_PARTES.format(total=len(blocos))
+    resumo, cortado = ollama(PROMPT_RESUMO.format(
+        fonte=fonte, duracao=duracao, nota_oradores=nota, instrucao_partes=instrucao_partes,
+        n_topicos=n_topicos, texto=texto), modelo, url, descarregar=True)
+    resumo = limpar_resumo(resumo)
+    if cortado or any(cortes):
+        resumo += ("\n\n> ⚠️ A transcrição não coube toda no modelo de linguagem; "
+                   "este resumo pode estar incompleto.")
+    return resumo
 
 
 # ----------------------------------------------------------------------------
@@ -490,11 +599,11 @@ def processar_audio(wav: Path, pasta: Path, args) -> None:
     if args.sem_resumo:
         print(f"📁 Transcrição em: {pasta}")
     else:
-        gerar_resumo(texto, pasta, args)
+        gerar_resumo(texto, segmentos[-1]["fim"] if segmentos else 0, pasta, args)
 
 
-def gerar_resumo(texto: str, pasta: Path, args) -> None:
-    resumo = resumir(texto, args.modelo, args.ollama_url)
+def gerar_resumo(texto: str, duracao_s: float, pasta: Path, args) -> None:
+    resumo = resumir(texto, args.modelo, args.ollama_url, duracao_s)
     data = dt.datetime.now().strftime("%d/%m/%Y %H:%M")
     (pasta / "resumo.md").write_text(
         f"# Reunião — {args.titulo or pasta.name}\n\n_Gerado em {data}_\n\n{resumo}\n",
@@ -583,12 +692,14 @@ def main():
         # "[mm:ss] Pessoa N: texto" ou "[mm:ss] texto" → segmentos, para juntar as falas
         segmentos = []
         for linha in args.transcricao.read_text(encoding="utf-8").splitlines():
-            if linha.strip():
-                fala = linha.split("] ", 1)[-1]
-                orador = re.match(r"(Pessoa \d+): (.*)", fala)
-                segmentos.append({"orador": orador[1], "texto": orador[2]} if orador
-                                 else {"texto": fala})
-        gerar_resumo(texto_para_resumo(segmentos), args.transcricao.parent, args)
+            partes = re.match(r"(?:\[([\d:]+)\] )?(?:(Pessoa \d+): )?(.*)", linha)
+            if partes[3].strip():
+                inicio = segundos(partes[1]) if partes[1] else \
+                    (segmentos[-1]["inicio"] if segmentos else 0.0)
+                segmentos.append({"inicio": inicio, "texto": partes[3],
+                                  **({"orador": partes[2]} if partes[2] else {})})
+        duracao = segmentos[-1]["inicio"] if segmentos else 0
+        gerar_resumo(texto_para_resumo(segmentos), duracao, args.transcricao.parent, args)
 
 
 if __name__ == "__main__":

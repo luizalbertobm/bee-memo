@@ -110,7 +110,38 @@ Cada reunião fica numa pasta própria em `~/Reunioes/AAAA-MM-DD_HHMM_titulo/`:
   por isso não se perde se algo falhar.
 - `transcricao.txt` — o texto, com os tempos e quem fala (`[00:05] Pessoa 2: …`).
 - `transcricao.json` — os segmentos (início, fim, texto e orador), para usar noutras ferramentas.
-- `resumo.md` — resumo, pontos principais, decisões, tarefas e questões em aberto.
+- `resumo.md` — o resumo, em português do Brasil (ver [O resumo](#o-resumo)).
+
+### O resumo
+
+O resumo concentra-se nos **assuntos mais importantes** da reunião:
+
+```
+## Resumo executivo
+Objetivo da reunião e principais conclusões, em 2 a 4 frases.
+
+## Tópicos principais
+### 1. Cadência de follow-ups (00:00–12:40)
+- os fatos concretos: números, prazos, nomes
+- **Conclusão:** o que ficou definido (e por quem, se houver oradores)
+### 2. …
+
+## Decisões
+## Tarefas          - [ ] tarefa — responsável — prazo (só o que foi dito)
+## Questões em aberto
+## Outros assuntos  assuntos menores, uma linha cada
+```
+
+- Os tópicos vêm do mais para o menos importante, pesando o tempo que se falou de cada um, se
+  levaram a decisões ou tarefas e o impacto. O número de tópicos acompanha a duração: 2 a 4
+  até 10 min, 3 a 6 até 45 min, 4 a 8 acima disso.
+- Cada tópico indica o intervalo da reunião em que foi discutido, para o encontrar na
+  transcrição.
+- Até cerca de **40 minutos**, a reunião inteira é resumida de uma só vez, com tudo à vista
+  do modelo. Reuniões mais longas são divididas em partes: primeiro tiram-se notas de cada
+  parte, e o resumo final junta os assuntos que aparecem em várias.
+- Se a transcrição não couber toda no modelo, o resumo termina com um aviso de que pode estar
+  incompleto.
 
 ### Opções úteis
 
@@ -154,7 +185,7 @@ com **Pessoa 1, Pessoa 2…**, pela ordem em que cada uma fala pela primeira vez
 ```
 
 O resumo usa esta informação para dizer quem decidiu ou ficou responsável por cada tarefa
-(`- [ ] Preparar as notas de lançamento — Pessoa 2 — prazo: quinta-feira`). Se só houver uma
+(`- [ ] Preparar as notas de lançamento — Pessoa 2 — quinta-feira`). Se só houver uma
 voz, como numa nota de voz do WhatsApp, a transcrição fica sem rótulos.
 
 Como funciona: um modelo deteta onde há fala e onde a voz muda, outro gera uma "impressão
@@ -177,8 +208,8 @@ Limites:
 - Transcrição: uma reunião de 1 hora demora aproximadamente 2 a 4 minutos.
 - Quem fala: cerca de 6 a 7 minutos por hora de reunião, no CPU. Desligue-o
   (`--sem-oradores` ou na janela) quando não precisar.
-- Resumo: entre 30 segundos e 2 minutos. As reuniões longas são divididas em partes e o
-  resumo final junta-as.
+- Resumo: entre 30 segundos e 2 minutos, numa só chamada ao modelo até cerca de 40 minutos de
+  reunião.
 - O Whisper e o Ollama usam a GPU um de cada vez: o Whisper é libertado antes do resumo e o
   Ollama descarrega o modelo logo a seguir, por isso os 8 GB de VRAM chegam.
 
