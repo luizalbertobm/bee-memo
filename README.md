@@ -17,7 +17,9 @@ computador**: é gratuita, funciona sem internet depois de instalada e o áudio 
 ## Instalação (uma vez)
 
 Requer Ubuntu, Zorin OS ou Debian, e o Docker instalado e acessível sem `sudo`
-(utilizador no grupo `docker`).
+(utilizador no grupo `docker`). Com GPU NVIDIA, o Python do sistema tem de ser o 3.10
+(Ubuntu 22.04, Zorin OS 17): a versão CUDA do `sherpa-onnx` que o instalador usa só existe
+para essa versão.
 
 ```bash
 cd meet-ai
@@ -118,7 +120,7 @@ O resumo concentra-se nos **assuntos mais importantes** da reunião:
 
 ```
 ## Resumo executivo
-Objetivo da reunião e principais conclusões, em 2 a 4 frases.
+Objetivo da reunião, resultado principal e o que vem a seguir, em 3 a 5 frases.
 
 ## Tópicos principais
 ### 1. Cadência de follow-ups (00:00–12:40)
@@ -134,15 +136,16 @@ Objetivo da reunião e principais conclusões, em 2 a 4 frases.
 
 - Os tópicos vêm do mais para o menos importante, pesando o tempo que se falou de cada um, se
   levaram a decisões ou tarefas e o impacto. O número de tópicos acompanha a duração: 2 a 4
-  até 10 min, 3 a 6 até 45 min, 4 a 8 acima disso.
+  até 10 min, 3 a 5 até 20 min, 4 a 7 acima disso.
 - Cada tópico indica o intervalo da reunião em que foi discutido, para o encontrar na
   transcrição.
-- Até cerca de **5 minutos**, a reunião é resumida de uma só vez. Acima disso são três
-  passos, porque um modelo pequeno não consegue ao mesmo tempo reter os detalhes de 30
-  minutos e escolher o que importa: (1) extrai notas detalhadas de cada bloco de ~10 min —
+- Só transcrições muito curtas (até 500 caracteres, menos de um minuto de fala) são
+  resumidas de uma só vez. As restantes passam por três passos, porque um modelo pequeno não
+  consegue ao mesmo tempo reter os detalhes de 30 minutos e escolher o que importa: (1) extrai notas detalhadas de cada bloco de ~10 min —
   ferramentas, versões, números, decisões, tarefas com o prazo tal como foi dito; (2) escolhe
   e ordena os temas a partir das notas; (3) escreve o resumo com as notas já agrupadas por
-  tema. Reuniões de várias horas têm as notas condensadas antes do último passo.
+  tema. Reuniões de várias horas têm as notas condensadas antes do segundo passo.
+- As decisões e as tarefas das notas entram no resumo sem repetidos, até 8 de cada.
 - O cabeçalho indica a data da reunião (tirada do nome do ficheiro, se tiver `AAAA-MM-DD`,
   ou da data do ficheiro), e as tarefas mantêm os prazos como foram ditos ("hoje à tarde").
 - Se a transcrição não couber toda no modelo, o resumo termina com um aviso de que pode estar
@@ -184,13 +187,13 @@ Depois da transcrição, a app identifica as diferentes vozes (*diarização*) e
 com **Pessoa 1, Pessoa 2…**, pela ordem em que cada uma fala pela primeira vez:
 
 ```
-[00:05] Pessoa 2: Eu proponho lançar na próxima sexta-feira.
-[00:11] Pessoa 1: Concordo. Quem prepara as notas de lançamento?
-[00:18] Pessoa 2: Eu trato das notas de lançamento até quinta-feira.
+[00:05] Pessoa 1: Eu proponho lançar na próxima sexta-feira.
+[00:11] Pessoa 2: Concordo. Quem prepara as notas de lançamento?
+[00:18] Pessoa 1: Eu trato das notas de lançamento até quinta-feira.
 ```
 
 O resumo usa esta informação para dizer quem decidiu ou ficou responsável por cada tarefa
-(`- [ ] Preparar as notas de lançamento — Pessoa 2 — quinta-feira`). Se só houver uma
+(`- [ ] Preparar as notas de lançamento — Pessoa 1 — quinta-feira`). Se só houver uma
 voz, como numa nota de voz do WhatsApp, a transcrição fica sem rótulos.
 
 Como funciona: um modelo deteta onde há fala e onde a voz muda, outro gera uma "impressão

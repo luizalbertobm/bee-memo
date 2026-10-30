@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Reunião Local — grava uma reunião presencial, transcreve e gera um resumo.
-100% local e gratuito: faster-whisper (transcrição) + Ollama (resumo).
+Reunião Local — grava uma reunião (presencial ou online), transcreve e gera um resumo.
+100% local e gratuito: faster-whisper (transcrição) + sherpa-onnx (quem fala) + Ollama (resumo).
 
 Uso:
   python reuniao.py                        # abre a interface gráfica
@@ -906,7 +906,8 @@ def texto_organizado(temas: list[tuple[str, list[dict]]], fora: list[dict],
 
 def resumir(texto: str, modelo: str, url: str, duracao_s: float,
             data: dt.date | None = None) -> str:
-    """Até ~5 min de fala, uma só chamada sobre a transcrição. Acima disso, em três passos:
+    """Até LIMITE_UMA_CHAMADA caracteres (menos de 1 min de fala), uma só chamada sobre a
+    transcrição. Acima disso, em três passos:
     1) extrair notas detalhadas de cada bloco de ~10 min (onde o modelo não perde pormenores);
     2) escolher e ordenar os temas a partir das notas (um passo à parte, senão o modelo segue
        a ordem cronológica e deixa o fim da reunião de fora);
