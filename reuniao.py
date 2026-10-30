@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Reunião Local — grava uma reunião (presencial ou online), transcreve e gera um resumo.
+Bee Memo — grava uma reunião (presencial ou online), transcreve e gera um resumo.
 100% local e gratuito: faster-whisper (transcrição) + sherpa-onnx (quem fala) + Ollama (resumo).
 
 Uso:
@@ -119,7 +119,7 @@ def capturar_sistema(microfone: str | None = None):
     modulos = []
     try:
         modulos.append(pactl("load-module", "module-null-sink", "sink_name=reuniao_mix",
-                             "sink_properties=device.description=Reuniao"))
+                             "sink_properties=device.description=BeeMemo"))
         for fonte in (f"{colunas}.monitor", microfone):
             modulos.append(pactl("load-module", "module-loopback", f"source={fonte}",
                                  "sink=reuniao_mix", "latency_msec=50"))

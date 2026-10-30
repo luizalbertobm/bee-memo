@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Instala tudo o que a Reunião Local precisa (Ubuntu / Zorin OS / Debian).
+# Instala tudo o que o Bee Memo precisa (Ubuntu / Zorin OS / Debian).
 # O Ollama corre em Docker, por isso o Docker tem de estar instalado.
 set -e
 cd "$(dirname "$0")"

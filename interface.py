@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 """
-Interface gráfica da Reunião Local, em GTK 3 — o toolkit do ambiente de trabalho
+Interface gráfica do Bee Memo, em GTK 3 — o toolkit do ambiente de trabalho
 (Zorin OS / GNOME), por isso segue o tema, a fonte, os ícones e o modo escuro do sistema.
 
 Não reimplementa o pipeline: constrói a linha de comandos e lança o reuniao.py
@@ -29,6 +29,7 @@ PASTA = Path(__file__).resolve().parent
 COMANDO = [str(PASTA / "reuniao")] if (PASTA / "reuniao").is_file() \
     else [str(PASTA / ".venv/bin/python"), str(PASTA / "reuniao.py")]
 PREFERENCIAS = Path.home() / ".config" / "reuniao" / "interface.json"
+NOME = "Bee Memo"
 ICONE = "audio-input-microphone"
 DESCRICAO_MODO = {
     "vivo": "Grava só o microfone — reuniões presenciais.",
@@ -75,7 +76,7 @@ def linha_de_preferencias(titulo: str, subtitulo: str, controlo: Gtk.Widget,
 
 class Janela(Gtk.ApplicationWindow):
     def __init__(self, app: Gtk.Application):
-        super().__init__(application=app, title="Reunião Local", icon_name=ICONE)
+        super().__init__(application=app, title=NOME, icon_name=ICONE)
         self.set_default_size(560, 640)
         self.proc: subprocess.Popen | None = None
         self.pasta: str | None = None
@@ -91,7 +92,7 @@ class Janela(Gtk.ApplicationWindow):
 
     # ------------------------------------------------------------------ layout
     def montar(self, prefs: dict):
-        barra = Gtk.HeaderBar(title="Reunião Local", show_close_button=True)
+        barra = Gtk.HeaderBar(title=NOME, show_close_button=True)
         barra.set_subtitle("Pronto")
         self.barra = barra
         self.botao_pasta = Gtk.Button.new_from_icon_name("folder-open-symbolic",
@@ -571,7 +572,7 @@ class Janela(Gtk.ApplicationWindow):
     def notificar(self, titulo: str, corpo: str):
         """Notificação do sistema — útil quando a janela está escondida atrás do browser."""
         if not self.is_active() and shutil.which("notify-send"):
-            subprocess.Popen(["notify-send", "-a", "Reunião Local", "-i", ICONE, titulo, corpo])
+            subprocess.Popen(["notify-send", "-a", NOME, "-i", ICONE, titulo, corpo])
 
     def mensagem(self, tipo: Gtk.MessageType, titulo: str, texto: str,
                  botoes: Gtk.ButtonsType = Gtk.ButtonsType.CLOSE) -> Gtk.ResponseType:
@@ -632,7 +633,7 @@ class Janela(Gtk.ApplicationWindow):
 def main():
     GLib.set_prgname("reuniao")                   # liga a janela ao reuniao.desktop
     Gdk.set_program_class("reuniao")              # (StartupWMClass) para a dock agrupar o ícone
-    GLib.set_application_name("Reunião Local")
+    GLib.set_application_name(NOME)
     app = Gtk.Application(application_id="local.reuniao.Gravador")
 
     def ativar(app):

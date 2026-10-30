@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🎙️ Reunião Local
+# 🐝 Bee Memo
 
 **A ata da sua reunião pronta minutos depois de ela acabar — sem que o áudio saia do seu computador.**
 
@@ -18,8 +18,8 @@ as **questões em aberto**.
 
 <table>
   <tr>
-    <td width="50%" align="center"><img src="docs/janela-inicio.png" alt="Janela da Reunião Local antes de gravar: título, modo ao vivo ou online, microfone, GPU e identificação de quem fala"></td>
-    <td width="50%" align="center"><img src="docs/janela-resumo.png" alt="Janela da Reunião Local com o resumo de uma reunião processada"></td>
+    <td width="50%" align="center"><img src="docs/janela-inicio.png" alt="Janela do Bee Memo antes de gravar: título, modo ao vivo ou online, microfone, GPU e identificação de quem fala"></td>
+    <td width="50%" align="center"><img src="docs/janela-resumo.png" alt="Janela do Bee Memo com o resumo de uma reunião processada"></td>
   </tr>
   <tr>
     <td align="center"><sub>Escolha o modo e carregue em <b>Iniciar gravação</b></sub></td>
@@ -27,7 +27,7 @@ as **questões em aberto**.
   </tr>
 </table>
 
-## Porquê a Reunião Local?
+## Porquê o Bee Memo?
 
 - 🔒 **Privacidade total.** Transcrição, identificação de vozes e resumo correm no seu
   computador. Nada é enviado para servidores de terceiros — ideal para reuniões com clientes,
@@ -99,7 +99,7 @@ O instalador:
 - com GPU NVIDIA, instala as bibliotecas CUDA, a versão CUDA do `sherpa-onnx` (identificação
   de quem fala na GPU) e o `nvidia-container-toolkit`, para o Ollama usar a GPU dentro do Docker;
 - arranca o Ollama no contentor `reuniao-ollama` e descarrega o modelo `qwen3.5:4b`;
-- cria o comando `reuniao` em `~/.local/bin` e o atalho **Reunião Local** no menu de aplicações.
+- cria o comando `reuniao` em `~/.local/bin` e o atalho **Bee Memo** no menu de aplicações.
 
 Na primeira transcrição, o modelo Whisper (~1,6 GB) é descarregado automaticamente, e na
 primeira identificação de oradores os modelos do sherpa-onnx (~33 MB, para
@@ -108,7 +108,7 @@ primeira identificação de oradores os modelos do sherpa-onnx (~33 MB, para
 ## Interface gráfica
 
 ```bash
-reuniao            # ou "Reunião Local" no menu de aplicações
+reuniao            # ou "Bee Memo" no menu de aplicações
 ```
 
 ### Gravar uma reunião
