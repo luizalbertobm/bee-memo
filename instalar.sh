@@ -4,6 +4,9 @@
 set -e
 cd "$(dirname "$0")"
 MODELO="qwen3:8b"
+# Versão CUDA do sherpa-onnx (identificação de quem fala na GPU); a versão tem de ser a
+# mesma do requirements.txt e compilada para CUDA 12 + cuDNN 9, como o Whisper.
+SHERPA_CUDA="https://huggingface.co/csukuangfj2/sherpa-onnx-wheels/resolve/main/cuda/2.0.1/sherpa_onnx-2.0.1+cuda12.cudnn9.onnxruntime1.28.2-cp310-cp310-linux_x86_64.whl"
 
 if ! docker info >/dev/null 2>&1; then
   echo "Erro: o Docker não está instalado ou o seu utilizador não tem acesso a ele."
@@ -22,8 +25,10 @@ python3 -m venv .venv
 
 COMPOSE_FILE="docker-compose.yml"
 if command -v nvidia-smi >/dev/null 2>&1; then
-  echo "==> GPU NVIDIA detetada: a instalar bibliotecas CUDA para o Whisper"
-  .venv/bin/pip install nvidia-cublas-cu12 "nvidia-cudnn-cu12==9.*"
+  echo "==> GPU NVIDIA detetada: a instalar bibliotecas CUDA (Whisper e identificação de quem fala)"
+  .venv/bin/pip install nvidia-cublas-cu12 "nvidia-cudnn-cu12==9.*" \
+    nvidia-cuda-runtime-cu12 nvidia-cufft-cu12 nvidia-curand-cu12
+  .venv/bin/pip install --no-deps --force-reinstall "$SHERPA_CUDA"
 
   if ! docker info --format '{{json .Runtimes}}' | grep -q nvidia; then
     if ! command -v nvidia-ctk >/dev/null 2>&1; then
@@ -68,7 +73,7 @@ cat > reuniao <<'EOF'
 #!/usr/bin/env bash
 DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 NV="$DIR/.venv/lib/python3*/site-packages/nvidia"
-for lib in $NV/cublas/lib $NV/cudnn/lib; do
+for lib in $NV/cublas/lib $NV/cudnn/lib $NV/cuda_runtime/lib $NV/cufft/lib $NV/curand/lib; do
   [ -d "$lib" ] && export LD_LIBRARY_PATH="$lib:$LD_LIBRARY_PATH"
 done
 if ! curl -fs http://localhost:11434/api/version >/dev/null 2>&1; then

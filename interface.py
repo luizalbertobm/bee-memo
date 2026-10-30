@@ -137,7 +137,8 @@ class Janela(Gtk.ApplicationWindow):
 
         self.gpu = Gtk.Switch(active=prefs.get("gpu", shutil.which("nvidia-smi") is not None))
         lista.add(linha_de_preferencias(
-            "Usar GPU", "Transcrição muito mais rápida (NVIDIA)", self.gpu)[0])
+            "Usar GPU", "Transcrição e identificação de quem fala muito mais rápidas (NVIDIA)",
+            self.gpu)[0])
 
         self.oradores = Gtk.Switch(active=prefs.get("oradores", True))
         lista.add(linha_de_preferencias(
@@ -462,7 +463,7 @@ class Janela(Gtk.ApplicationWindow):
         elif linha.startswith("⬇"):
             self.definir_estado("A descarregar modelos…",
                                 "Só acontece na primeira vez que se identifica quem fala.")
-        elif linha.startswith("👥 A identificar"):
+        elif linha.startswith(("👥 A identificar", "👥 A terminar")):
             self.definir_estado("A identificar quem fala…")
         elif linha.startswith("🤖"):
             self.definir_estado("A gerar o resumo…")

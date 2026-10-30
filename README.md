@@ -10,7 +10,7 @@ computador**: é gratuita, funciona sem internet depois de instalada e o áudio 
 | Gravação    | `sounddevice` + PulseAudio (microfone e, no modo online, o som do sistema) |
 | Conversão   | `ffmpeg` (para ficheiros: opus, mp3, wav, m4a, vídeo…)        |
 | Transcrição | `faster-whisper`, modelo `large-v3-turbo` na GPU              |
-| Quem fala   | `sherpa-onnx` (segmentação pyannote + vozes WeSpeaker), no CPU |
+| Quem fala   | `sherpa-onnx` (segmentação pyannote + vozes WeSpeaker), na GPU ou no CPU, em paralelo com a transcrição |
 | Resumo      | Ollama (em Docker) com o modelo `qwen3:8b`                    |
 | Interface   | GTK 3 (segue o tema do sistema)                               |
 
@@ -29,8 +29,8 @@ O instalador:
 
 - instala os pacotes do sistema (`ffmpeg`, PortAudio, GTK para Python);
 - cria o ambiente Python em `.venv`;
-- com GPU NVIDIA, instala as bibliotecas CUDA do Whisper e o `nvidia-container-toolkit`,
-  para o Ollama usar a GPU dentro do Docker;
+- com GPU NVIDIA, instala as bibliotecas CUDA, a versão CUDA do `sherpa-onnx` (identificação
+  de quem fala na GPU) e o `nvidia-container-toolkit`, para o Ollama usar a GPU dentro do Docker;
 - arranca o Ollama no contentor `reuniao-ollama` e descarrega o modelo `qwen3:8b`;
 - cria o comando `reuniao` em `~/.local/bin` e o atalho **Reunião Local** no menu de aplicações.
 
@@ -206,7 +206,10 @@ Limites:
 ## Desempenho esperado (RTX 4060, 8 GB)
 
 - Transcrição: uma reunião de 1 hora demora aproximadamente 2 a 4 minutos.
-- Quem fala: cerca de 6 a 7 minutos por hora de reunião, no CPU. Desligue-o
+- Quem fala: corre **ao mesmo tempo** que a transcrição, num processo à parte. Na GPU, cerca
+  de 3 minutos por 30 minutos de reunião (no CPU, cerca de 5); como a transcrição demora
+  menos, é esta etapa que dita o tempo total. A GPU acelera menos aqui do que no Whisper
+  porque os modelos são chamados muitas vezes em pedaços pequenos. Desligue-a
   (`--sem-oradores` ou na janela) quando não precisar.
 - Resumo: entre 30 segundos e 2 minutos, numa só chamada ao modelo até cerca de 40 minutos de
   reunião.
@@ -251,6 +254,4 @@ Limites:
 ## Ideias para evoluir
 
 - **Dar nomes às pessoas**: trocar Pessoa 1, 2… por nomes reais e refazer o resumo.
-- **Quem fala na GPU**: o sherpa-onnx também corre em CUDA, o que reduziria os 6 a 7 minutos
-  por hora de reunião.
 - **Notas importantes**: carregar numa tecla durante a gravação para marcar o momento.

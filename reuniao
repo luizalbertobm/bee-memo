@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 NV="$DIR/.venv/lib/python3*/site-packages/nvidia"
-for lib in $NV/cublas/lib $NV/cudnn/lib; do
+for lib in $NV/cublas/lib $NV/cudnn/lib $NV/cuda_runtime/lib $NV/cufft/lib $NV/curand/lib; do
   [ -d "$lib" ] && export LD_LIBRARY_PATH="$lib:$LD_LIBRARY_PATH"
 done
 if ! curl -fs http://localhost:11434/api/version >/dev/null 2>&1; then

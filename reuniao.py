@@ -12,6 +12,7 @@ Uso:
 """
 
 import argparse
+import atexit
 import contextlib
 import datetime as dt
 import json
@@ -65,12 +66,6 @@ def gravar(destino: Path, dispositivo=None) -> Path:
     print(f"🎙️  A gravar para {destino}")
     print("    Carregue Ctrl+C para terminar a reunião.\n")
     inicio = dt.datetime.now()
-
-    # Um `kill` (ou fechar o terminal) termina como o Ctrl+C: fecha o WAV e limpa o áudio.
-    def terminar(sinal, frame):
-        raise KeyboardInterrupt
-    for sinal in (signal.SIGTERM, signal.SIGHUP):
-        signal.signal(sinal, terminar)
 
     # Escreve no disco à medida que grava: se algo falhar, o áudio não se perde.
     with sf.SoundFile(destino, mode="w", samplerate=TAXA_AMOSTRAGEM,
@@ -184,25 +179,37 @@ def transcrever(wav: Path, nome_modelo: str, idioma: str, forcar_cpu: bool,
     if taxa != TAXA_AMOSTRAGEM:
         sys.exit(f"Erro: o WAV tem {taxa} Hz; esperado {TAXA_AMOSTRAGEM} Hz.")
 
-    modelo = carregar_modelo(nome_modelo, forcar_cpu)
     total = len(audio) / TAXA_AMOSTRAGEM
-    print(f"📝 A transcrever {formatar_tempo(total)} de áudio...")
 
-    segmentos, _ = modelo.transcribe(
-        np.ascontiguousarray(audio), language=idioma, beam_size=5,
-        vad_filter=True,                       # ignora silêncios
-        vad_parameters={"min_silence_duration_ms": 500},
-        word_timestamps=palavras,
-    )
-    resultado = []
-    for s in segmentos:
-        segmento = {"inicio": s.start, "fim": s.end, "texto": s.text.strip()}
-        if palavras:
-            segmento["palavras"] = [(p.start, p.end, p.word) for p in s.words or []]
-        resultado.append(segmento)
-        print(f"\r    {s.end / total:5.0%}", end="", flush=True)
-    print("\r    100%\n")
-    del segmentos, modelo                      # liberta a VRAM antes do Ollama carregar o LLM
+    def correr(modelo) -> list[dict]:
+        print(f"📝 A transcrever {formatar_tempo(total)} de áudio...")
+        segmentos, _ = modelo.transcribe(
+            np.ascontiguousarray(audio), language=idioma, beam_size=5,
+            vad_filter=True,                       # ignora silêncios
+            vad_parameters={"min_silence_duration_ms": 500},
+            word_timestamps=palavras,
+        )
+        resultado = []
+        for s in segmentos:
+            segmento = {"inicio": s.start, "fim": s.end, "texto": s.text.strip()}
+            if palavras:
+                segmento["palavras"] = [(p.start, p.end, p.word) for p in s.words or []]
+            resultado.append(segmento)
+            print(f"\r    {s.end / total:5.0%}", end="", flush=True)
+        print("\r    100%\n")
+        return resultado
+
+    modelo = carregar_modelo(nome_modelo, forcar_cpu)
+    try:
+        resultado = correr(modelo)
+    except RuntimeError as erro:
+        # Sem as bibliotecas CUDA (fora do atalho `reuniao`), a GPU só falha ao transcrever.
+        if forcar_cpu or modelo.model.device == "cpu":
+            raise
+        print(f"\n[aviso] GPU indisponível ({erro}). A usar CPU.")
+        modelo = carregar_modelo(nome_modelo, True)
+        resultado = correr(modelo)
+    del modelo                                 # liberta a VRAM antes do Ollama carregar o LLM
     return resultado
 
 
@@ -286,21 +293,45 @@ def modelos_oradores() -> tuple[Path, Path]:
     return segmentacao, vozes
 
 
-def diarizar(wav: Path, pessoas: int | None) -> list[tuple[float, float, int]]:
-    """Turnos (início, fim, orador) de cada voz; pessoas=None deteta quantas são."""
+def usar_gpu_oradores(forcar_cpu: bool) -> bool:
+    """A GPU só compensa com a versão CUDA do sherpa-onnx e as bibliotecas NVIDIA carregáveis
+    (o atalho `reuniao` põe-nas no LD_LIBRARY_PATH). Se faltar alguma, o sherpa cai sozinho
+    para o CPU com 1 fio e fica mais lento do que o CPU normal — por isso decide-se aqui."""
+    if forcar_cpu or not shutil.which("nvidia-smi"):
+        return False
+    import ctypes
+    import sherpa_onnx
+    if "cuda" not in sherpa_onnx.__version__:
+        return False
+    try:
+        for biblioteca in ("libcublasLt.so.12", "libcudnn.so.9"):
+            ctypes.CDLL(biblioteca)
+    except OSError:
+        return False
+    return True
+
+
+def diarizar_local(wav: Path, pessoas: int | None, forcar_cpu: bool) -> None:
+    """Corre no processo filho (subcomando interno `_oradores`) e escreve no stdout:
+    "MODO GPU|CPU", "PROGRESSO N" (0–100) e, no fim, "TURNOS [[início, fim, orador], …]".
+
+    É um processo à parte por duas razões: o sherpa-onnx em CUDA quebra se for criado depois
+    do Whisper no mesmo processo, e assim a identificação corre em paralelo com a transcrição.
+    """
     import sherpa_onnx
     import soundfile as sf
 
     segmentacao, vozes = modelos_oradores()
-    print("👥 A identificar quem fala...")
-    fios = max(1, (os.cpu_count() or 2) // 2)
+    gpu = usar_gpu_oradores(forcar_cpu)
+    print(f"MODO {'GPU' if gpu else 'CPU'}", flush=True)
+    provider, fios = ("cuda", 1) if gpu else ("cpu", max(1, (os.cpu_count() or 2) // 2))
     config = sherpa_onnx.OfflineSpeakerDiarizationConfig(
         segmentation=sherpa_onnx.OfflineSpeakerSegmentationModelConfig(
             pyannote=sherpa_onnx.OfflineSpeakerSegmentationPyannoteModelConfig(
                 model=str(segmentacao)),
-            num_threads=fios),
-        embedding=sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=str(vozes),
-                                                              num_threads=fios),
+            num_threads=fios, provider=provider),
+        embedding=sherpa_onnx.SpeakerEmbeddingExtractorConfig(
+            model=str(vozes), num_threads=fios, provider=provider),
         clustering=sherpa_onnx.FastClusteringConfig(num_clusters=pessoas or -1,
                                                     threshold=LIMIAR_ORADORES),
         min_duration_on=0.3, min_duration_off=0.5)
@@ -310,12 +341,55 @@ def diarizar(wav: Path, pessoas: int | None) -> list[tuple[float, float, int]]:
     if audio.ndim > 1:
         audio = audio.mean(axis=1)
 
+    ultimo = -1
+
     def progresso(feitos: int, total: int) -> int:
-        print(f"\r    {feitos / total:5.0%}", end="", flush=True)
+        nonlocal ultimo
+        pct = 100 * feitos // total
+        if pct != ultimo:                          # uma linha por ponto percentual, no máximo
+            ultimo = pct
+            print(f"PROGRESSO {pct}", flush=True)
         return 0                                   # 0 = continuar
     turnos = diarizador.process(audio, callback=progresso).sort_by_start_time()
-    print("\r    100%\n")
-    return [(t.start, t.end, t.speaker) for t in turnos]
+    print("TURNOS " + json.dumps([(t.start, t.end, t.speaker) for t in turnos]), flush=True)
+
+
+class Oradores:
+    """Identificação de quem fala num processo à parte, lançada antes do Whisper.
+    `terminar()` espera por ela, mostra o progresso que falta e devolve os turnos."""
+
+    def __init__(self, wav: Path, pessoas: int | None, forcar_cpu: bool):
+        modelos_oradores()           # o download (e o seu erro) acontecem no processo principal
+        comando = [sys.executable, str(Path(__file__).resolve()), "_oradores", str(wav)]
+        if pessoas:
+            comando += ["--pessoas", str(pessoas)]
+        if forcar_cpu:
+            comando.append("--cpu")
+        self.proc = subprocess.Popen(comando, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                     text=True)
+        # Se o processo principal morrer (Ctrl+C, fechar a janela), o filho não fica órfão.
+        atexit.register(lambda: self.proc.poll() is None and self.proc.kill())
+        modo = self.proc.stdout.readline().strip().removeprefix("MODO ") or "CPU"
+        print(f"👥 A identificar quem fala ({modo}, em paralelo com a transcrição)...")
+
+    def terminar(self) -> list[tuple[float, float, int]]:
+        if self.proc.poll() is None:
+            print("👥 A terminar a identificação de quem fala...")
+        turnos = None
+        for linha in self.proc.stdout:
+            if linha.startswith("PROGRESSO "):
+                print(f"\r    {int(linha.split()[1]):3d}%", end="", flush=True)
+            elif linha.startswith("TURNOS "):
+                turnos = [tuple(t) for t in json.loads(linha[7:])]
+        erro = self.proc.stderr.read()
+        self.proc.wait()
+        if turnos is None or self.proc.returncode != 0:
+            detalhe = (erro.strip().splitlines() or ["sem detalhes"])[-1]
+            print(f"\n[aviso] A identificação de quem fala falhou ({detalhe}). "
+                  "A transcrição fica sem oradores.\n")
+            return []
+        print("\r    100%\n")
+        return turnos
 
 
 def atribuir_oradores(segmentos: list[dict], turnos: list[tuple[float, float, int]]) -> list[dict]:
@@ -592,9 +666,13 @@ def nova_pasta(base: Path, titulo: str | None) -> Path:
 def processar_audio(wav: Path, pasta: Path, args) -> None:
     # Com --pessoas 1 não há vozes para distinguir.
     oradores = not args.sem_oradores and args.pessoas != 1
+    if oradores:
+        identificacao = Oradores(wav, args.pessoas, args.cpu)     # arranca já, em paralelo
     segmentos = transcrever(wav, args.whisper, args.idioma, args.cpu, palavras=oradores)
     if oradores:
-        segmentos = atribuir_oradores(segmentos, diarizar(wav, args.pessoas))
+        turnos = identificacao.terminar()
+        segmentos = atribuir_oradores(segmentos, turnos) if turnos else [
+            {k: v for k, v in s.items() if k != "palavras"} for s in segmentos]
     texto = guardar_transcricao(segmentos, pasta)
     if args.sem_resumo:
         print(f"📁 Transcrição em: {pasta}")
@@ -643,9 +721,14 @@ def main():
     opcoes(parser, lambda v: v)
     comum = argparse.ArgumentParser(add_help=False)
     opcoes(comum, lambda v: argparse.SUPPRESS)
-    sub = parser.add_subparsers(dest="comando")    # sem subcomando → interface gráfica
+    # sem subcomando → interface gráfica; o metavar esconde o subcomando interno `_oradores`
+    sub = parser.add_subparsers(dest="comando", metavar="comando")
 
     sub.add_parser("gui", help="abre a interface gráfica (o mesmo que correr sem argumentos)")
+    # interno: a identificação de quem fala corre neste subcomando, num processo filho.
+    # Só é registado quando pedido, para não aparecer na ajuda.
+    if sys.argv[1:2] == ["_oradores"]:
+        sub.add_parser("_oradores", parents=[comum]).add_argument("audio", type=Path)
     g = sub.add_parser("gravar", parents=[comum], help="grava uma reunião nova")
     g.add_argument("--dispositivo", help="número ou nome do microfone (ver 'microfones')")
     g.add_argument("--meet", action="store_true",
@@ -660,9 +743,18 @@ def main():
     if args.pessoas is not None and args.pessoas < 1:
         parser.error("--pessoas tem de ser 1 ou mais")
 
+    # Um `kill` (ou fechar a janela/terminal) termina como o Ctrl+C: a gravação fecha o WAV e
+    # limpa o áudio do sistema, e o processo de identificação de oradores é terminado (atexit).
+    def terminar(sinal, frame):
+        raise KeyboardInterrupt
+    for sinal in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sinal, terminar)
+
     if args.comando in (None, "gui"):
         # A interface usa o GTK do sistema (python3-gi), que não está no .venv.
         os.execv("/usr/bin/python3", ["python3", str(Path(__file__).with_name("interface.py"))])
+    elif args.comando == "_oradores":
+        diarizar_local(args.audio, args.pessoas, args.cpu)
     elif args.comando == "microfones":
         listar_dispositivos()
     elif args.comando == "gravar":
@@ -703,4 +795,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:                  # Ctrl+C ou kill fora da gravação
+        sys.exit("\nInterrompido.")
