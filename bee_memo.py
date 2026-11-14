@@ -4,11 +4,11 @@ Bee Memo — grava uma reunião (presencial ou online), transcreve e gera um res
 100% local e gratuito: faster-whisper (transcrição) + sherpa-onnx (quem fala) + Ollama (resumo).
 
 Uso:
-  python reuniao.py                        # abre a interface gráfica
-  python reuniao.py gravar                 # grava até carregar Ctrl+C, depois transcreve e resume
-  python reuniao.py gravar --meet          # reunião online: grava o microfone e o som do sistema
-  python reuniao.py processar audio.m4a    # processa um áudio que já existe
-  python reuniao.py resumir transcricao.txt  # só refaz o resumo a partir de uma transcrição
+  python bee_memo.py                        # abre a interface gráfica
+  python bee_memo.py gravar                 # grava até carregar Ctrl+C, depois transcreve e resume
+  python bee_memo.py gravar --meet          # reunião online: grava o microfone e o som do sistema
+  python bee_memo.py processar audio.m4a    # processa um áudio que já existe
+  python bee_memo.py resumir transcricao.txt  # só refaz o resumo a partir de uma transcrição
 """
 
 import argparse
@@ -44,7 +44,7 @@ LIMITE_NOTAS = 40000                   # notas maiores são condensadas antes do
 
 # Identificação de quem fala (diarização) com sherpa-onnx; os modelos descarregam-se na
 # primeira utilização para PASTA_MODELOS.
-PASTA_MODELOS = Path.home() / ".cache" / "reuniao" / "modelos"
+PASTA_MODELOS = Path.home() / ".cache" / "bee-memo" / "modelos"
 URL_MODELOS = "https://github.com/k2-fsa/sherpa-onnx/releases/download"
 MODELO_SEGMENTACAO = "sherpa-onnx-pyannote-segmentation-3-0"   # onde há fala e mudanças de voz
 MODELO_VOZES = "wespeaker_en_voxceleb_resnet34_LM.onnx"           # "impressão digital" de cada voz
@@ -118,13 +118,13 @@ def capturar_sistema(microfone: str | None = None):
     microfone = microfone or pactl("get-default-source")
     modulos = []
     try:
-        modulos.append(pactl("load-module", "module-null-sink", "sink_name=reuniao_mix",
+        modulos.append(pactl("load-module", "module-null-sink", "sink_name=beememo_mix",
                              "sink_properties=device.description=BeeMemo"))
         for fonte in (f"{colunas}.monitor", microfone):
             modulos.append(pactl("load-module", "module-loopback", f"source={fonte}",
-                                 "sink=reuniao_mix", "latency_msec=50"))
+                                 "sink=beememo_mix", "latency_msec=50"))
         # O libpulse lê esta variável quando o fluxo de gravação é aberto.
-        os.environ["PULSE_SOURCE"] = "reuniao_mix.monitor"
+        os.environ["PULSE_SOURCE"] = "beememo_mix.monitor"
         print("🔊 A captar também o som do sistema (reunião online).")
         yield
     finally:
@@ -205,7 +205,7 @@ def transcrever(wav: Path, nome_modelo: str, idioma: str, forcar_cpu: bool,
     try:
         resultado = correr(modelo)
     except RuntimeError as erro:
-        # Sem as bibliotecas CUDA (fora do atalho `reuniao`), a GPU só falha ao transcrever.
+        # Sem as bibliotecas CUDA (fora do atalho `bee-memo`), a GPU só falha ao transcrever.
         if forcar_cpu or modelo.model.device == "cpu":
             raise
         print(f"\n[aviso] GPU indisponível ({erro}). A usar CPU.")
@@ -297,7 +297,7 @@ def modelos_oradores() -> tuple[Path, Path]:
 
 def usar_gpu_oradores(forcar_cpu: bool) -> bool:
     """A GPU só compensa com a versão CUDA do sherpa-onnx e as bibliotecas NVIDIA carregáveis
-    (o atalho `reuniao` põe-nas no LD_LIBRARY_PATH). Se faltar alguma, o sherpa cai sozinho
+    (o atalho `bee-memo` põe-nas no LD_LIBRARY_PATH). Se faltar alguma, o sherpa cai sozinho
     para o CPU com 1 fio e fica mais lento do que o CPU normal — por isso decide-se aqui."""
     if forcar_cpu or not shutil.which("nvidia-smi"):
         return False
@@ -602,7 +602,7 @@ def ollama(prompt: str, modelo: str, url: str, descarregar: bool = False) -> tup
         detalhe = erro.read().decode(errors="ignore")
         if "not found" in detalhe:
             sys.exit(f"Erro: o modelo '{modelo}' não está instalado. "
-                     f"Corra: docker exec reuniao-ollama ollama pull {modelo}")
+                     f"Corra: docker exec bee-memo-ollama ollama pull {modelo}")
         sys.exit(f"Erro do Ollama ({erro.code}): {detalhe}")
     except urllib.error.URLError:
         sys.exit("Erro: o Ollama não está a correr. Inicie-o na pasta do projeto com: "

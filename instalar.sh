@@ -63,13 +63,33 @@ if systemctl is-active --quiet ollama 2>/dev/null; then
   sudo systemctl disable --now ollama
 fi
 
+# Instalações anteriores, com o nome "reuniao": passa as preferências, os modelos de oradores
+# e os modelos do Ollama (~13 GB) para os nomes novos, em vez de os descarregar de novo.
+[ -d ~/.config/reuniao ] && [ ! -e ~/.config/bee-memo ] && mv ~/.config/reuniao ~/.config/bee-memo
+[ -d ~/.cache/reuniao ] && [ ! -e ~/.cache/bee-memo ] && mv ~/.cache/reuniao ~/.cache/bee-memo
+rm -f ~/.local/bin/reuniao ~/.local/share/applications/reuniao.desktop
+if docker inspect reuniao-ollama >/dev/null 2>&1; then
+  ANTIGO=$(docker inspect reuniao-ollama \
+    --format '{{range .Mounts}}{{if eq .Destination "/root/.ollama"}}{{.Name}}{{end}}{{end}}')
+  docker rm -f reuniao-ollama >/dev/null
+  if [ -n "$ANTIGO" ] && ! docker volume inspect bee-memo_ollama >/dev/null 2>&1; then
+    echo "==> A passar os modelos do Ollama para o volume bee-memo_ollama"
+    # com as etiquetas do Compose, para ele o reconhecer como volume do projeto
+    docker volume create --label com.docker.compose.project=bee-memo \
+      --label com.docker.compose.volume=ollama bee-memo_ollama >/dev/null
+    docker run --rm -v "$ANTIGO":/de -v bee-memo_ollama:/para --entrypoint sh ollama/ollama \
+      -c 'cp -a /de/. /para/'
+    echo "    O volume antigo pode ser apagado com:  docker volume rm $ANTIGO"
+  fi
+fi
+
 echo "==> Ollama em Docker"
 docker compose up -d
 until curl -fs http://localhost:11434/api/version >/dev/null; do sleep 1; done
-docker exec reuniao-ollama ollama pull "$MODELO"
+docker exec bee-memo-ollama ollama pull "$MODELO"
 
-# Atalho 'reuniao' que trata das bibliotecas CUDA e arranca o Ollama se preciso
-cat > reuniao <<'EOF'
+# Atalho 'bee-memo' que trata das bibliotecas CUDA e arranca o Ollama se preciso
+cat > bee-memo <<'EOF'
 #!/usr/bin/env bash
 DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 NV="$DIR/.venv/lib/python3*/site-packages/nvidia"
@@ -79,16 +99,17 @@ done
 if ! curl -fs http://localhost:11434/api/version >/dev/null 2>&1; then
   (cd "$DIR" && docker compose up -d >/dev/null 2>&1) || true
 fi
-exec "$DIR/.venv/bin/python" "$DIR/reuniao.py" "$@"
+exec "$DIR/.venv/bin/python" "$DIR/bee_memo.py" "$@"
 EOF
-chmod +x reuniao reuniao.py
-mkdir -p ~/.local/bin && ln -sf "$PWD/reuniao" ~/.local/bin/reuniao
+chmod +x bee-memo bee_memo.py
+mkdir -p ~/.local/bin && ln -sf "$PWD/bee-memo" ~/.local/bin/bee-memo
 
 # Atalho no menu de aplicações (abre a interface gráfica)
 mkdir -p ~/.local/share/applications
-sed "s#@HOME@#$HOME#" reuniao.desktop > ~/.local/share/applications/reuniao.desktop
+sed "s#@HOME@#$HOME#" net.beecoders.BeeMemo.desktop \
+  > ~/.local/share/applications/net.beecoders.BeeMemo.desktop
 command -v update-desktop-database >/dev/null && update-desktop-database ~/.local/share/applications
 
 echo
-echo "✅ Instalado. Experimente:  reuniao gravar --titulo \"Teste\""
-echo "   (se 'reuniao' não for encontrado, abra um terminal novo)"
+echo "✅ Instalado. Experimente:  bee-memo gravar --titulo \"Teste\""
+echo "   (se 'bee-memo' não for encontrado, abra um terminal novo)"

@@ -7,4 +7,4 @@ done
 if ! curl -fs http://localhost:11434/api/version >/dev/null 2>&1; then
   (cd "$DIR" && docker compose up -d >/dev/null 2>&1) || true
 fi
-exec "$DIR/.venv/bin/python" "$DIR/reuniao.py" "$@"
+exec "$DIR/.venv/bin/python" "$DIR/bee_memo.py" "$@"

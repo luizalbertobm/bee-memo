@@ -3,8 +3,8 @@
 Interface gráfica do Bee Memo, em GTK 3 — o toolkit do ambiente de trabalho
 (Zorin OS / GNOME), por isso segue o tema, a fonte, os ícones e o modo escuro do sistema.
 
-Não reimplementa o pipeline: constrói a linha de comandos e lança o reuniao.py
-como subprocesso, mostrando o que ele imprime. Abre-se com `reuniao` sem argumentos.
+Não reimplementa o pipeline: constrói a linha de comandos e lança o bee_memo.py
+como subprocesso, mostrando o que ele imprime. Abre-se com `bee-memo` sem argumentos.
 Corre com o Python do sistema (precisa de python3-gi), não com o do .venv.
 """
 import codecs
@@ -25,10 +25,10 @@ gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
 
 PASTA = Path(__file__).resolve().parent
-# O atalho `reuniao` configura as bibliotecas CUDA e arranca o Ollama; se existir, usamo-lo.
-COMANDO = [str(PASTA / "reuniao")] if (PASTA / "reuniao").is_file() \
-    else [str(PASTA / ".venv/bin/python"), str(PASTA / "reuniao.py")]
-PREFERENCIAS = Path.home() / ".config" / "reuniao" / "interface.json"
+# O atalho `bee-memo` configura as bibliotecas CUDA e arranca o Ollama; se existir, usamo-lo.
+COMANDO = [str(PASTA / "bee-memo")] if (PASTA / "bee-memo").is_file() \
+    else [str(PASTA / ".venv/bin/python"), str(PASTA / "bee_memo.py")]
+PREFERENCIAS = Path.home() / ".config" / "bee-memo" / "interface.json"
 NOME = "Bee Memo"
 ICONE = "audio-input-microphone"
 DESCRICAO_MODO = {
@@ -590,11 +590,11 @@ class Janela(Gtk.ApplicationWindow):
             if not self.gravacao_fechada:
                 titulo = "Terminar a gravação?"
                 texto = ("A reunião ainda está a ser gravada. O áudio fica guardado e podes "
-                         "processá-lo depois com «reuniao processar <pasta>/audio.wav».")
+                         "processá-lo depois com «bee-memo processar <pasta>/audio.wav».")
             else:
                 titulo = "Fechar durante o processamento?"
                 texto = ("A transcrição ou o resumo ainda estão a decorrer. O áudio fica "
-                         "guardado; podes retomar com «reuniao processar <pasta>/audio.wav».")
+                         "guardado; podes retomar com «bee-memo processar <pasta>/audio.wav».")
             if self.mensagem(Gtk.MessageType.QUESTION, titulo, texto,
                              Gtk.ButtonsType.YES_NO) != Gtk.ResponseType.YES:
                 return True
@@ -631,10 +631,10 @@ class Janela(Gtk.ApplicationWindow):
 
 
 def main():
-    GLib.set_prgname("reuniao")                   # liga a janela ao reuniao.desktop
-    Gdk.set_program_class("reuniao")              # (StartupWMClass) para a dock agrupar o ícone
+    GLib.set_prgname("bee-memo")                  # liga a janela ao net.beecoders.BeeMemo.desktop
+    Gdk.set_program_class("bee-memo")             # (StartupWMClass) para a dock agrupar o ícone
     GLib.set_application_name(NOME)
-    app = Gtk.Application(application_id="local.reuniao.Gravador")
+    app = Gtk.Application(application_id="net.beecoders.BeeMemo")
 
     def ativar(app):
         # Uma só janela: abrir a app de novo traz a existente para a frente.

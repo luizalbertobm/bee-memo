@@ -2,9 +2,9 @@
 Type=Application
 Name=Bee Memo
 Comment=Grava, transcreve e resume reuniões — 100% local
-Exec=@HOME@/.local/bin/reuniao
+Exec=@HOME@/.local/bin/bee-memo
 Icon=audio-input-microphone
 Terminal=false
-StartupWMClass=reuniao
+StartupWMClass=bee-memo
 Categories=AudioVideo;Audio;
 Keywords=reunião;gravar;transcrição;resumo;meet;

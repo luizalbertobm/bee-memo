@@ -87,8 +87,8 @@ Requer Ubuntu, Zorin OS ou Debian, e o Docker instalado e acessível sem `sudo`
 para essa versão.
 
 ```bash
-cd meet-ai
-chmod +x instalar.sh
+git clone https://github.com/luizalbertobm/bee-memo.git
+cd bee-memo
 ./instalar.sh
 ```
 
@@ -98,17 +98,19 @@ O instalador:
 - cria o ambiente Python em `.venv`;
 - com GPU NVIDIA, instala as bibliotecas CUDA, a versão CUDA do `sherpa-onnx` (identificação
   de quem fala na GPU) e o `nvidia-container-toolkit`, para o Ollama usar a GPU dentro do Docker;
-- arranca o Ollama no contentor `reuniao-ollama` e descarrega o modelo `qwen3.5:4b`;
-- cria o comando `reuniao` em `~/.local/bin` e o atalho **Bee Memo** no menu de aplicações.
+- arranca o Ollama no contentor `bee-memo-ollama` e descarrega o modelo `qwen3.5:4b`;
+- cria o comando `bee-memo` em `~/.local/bin` e o atalho **Bee Memo** no menu de aplicações;
+- numa instalação anterior com o nome `reuniao`, passa as preferências, os modelos e o
+  contentor do Ollama para os nomes novos, sem voltar a descarregar os modelos.
 
 Na primeira transcrição, o modelo Whisper (~1,6 GB) é descarregado automaticamente, e na
 primeira identificação de oradores os modelos do sherpa-onnx (~33 MB, para
-`~/.cache/reuniao/modelos`).
+`~/.cache/bee-memo/modelos`).
 
 ## Interface gráfica
 
 ```bash
-reuniao            # ou "Bee Memo" no menu de aplicações
+bee-memo           # ou "Bee Memo" no menu de aplicações
 ```
 
 ### Gravar uma reunião
@@ -150,23 +152,23 @@ acessíveis.
 
 Quando o resumo fica pronto com a janela em segundo plano, aparece uma notificação do sistema.
 As escolhas (modo, microfone, GPU, identificar quem fala) ficam guardadas em
-`~/.config/reuniao/interface.json`.
+`~/.config/bee-memo/interface.json`.
 
 A janela é só uma frente para os comandos abaixo: tudo o que faz também se faz no terminal.
 
 ## Linha de comandos
 
 ```bash
-reuniao gravar --titulo "Reunião com cliente"   # Ctrl+C para terminar
-reuniao gravar --meet --titulo "Daily"          # reunião online (Meet, Teams, Zoom…)
-reuniao processar ~/Downloads/audio.opus        # áudio que já existe (WhatsApp, telemóvel…)
-reuniao resumir ~/Reunioes/<pasta>/transcricao.txt   # refaz só o resumo
-reuniao microfones                              # lista os microfones
-reuniao gravar --dispositivo 3                  # usa um microfone específico
-reuniao                                         # abre a interface gráfica
+bee-memo gravar --titulo "Reunião com cliente"  # Ctrl+C para terminar
+bee-memo gravar --meet --titulo "Daily"         # reunião online (Meet, Teams, Zoom…)
+bee-memo processar ~/Downloads/audio.opus       # áudio que já existe (WhatsApp, telemóvel…)
+bee-memo resumir ~/Reunioes/<pasta>/transcricao.txt  # refaz só o resumo
+bee-memo microfones                             # lista os microfones
+bee-memo gravar --dispositivo 3                 # usa um microfone específico
+bee-memo                                        # abre a interface gráfica
 ```
 
-O `--dispositivo` aceita o número mostrado por `reuniao microfones` ou o nome de uma fonte
+O `--dispositivo` aceita o número mostrado por `bee-memo microfones` ou o nome de uma fonte
 do PulseAudio (`pactl list short sources`).
 
 ### Ficheiros gerados
@@ -220,7 +222,7 @@ Objetivo da reunião, resultado principal e o que vem a seguir, em 3 a 5 frases.
 
 | Opção | Para quê |
 |-------|----------|
-| `--modelo llama3.1:8b` | usar outro modelo do Ollama (instale primeiro com `docker exec reuniao-ollama ollama pull …`) |
+| `--modelo llama3.1:8b` | usar outro modelo do Ollama (instale primeiro com `docker exec bee-memo-ollama ollama pull …`) |
 | `--whisper medium` | usar um modelo Whisper mais leve |
 | `--cpu` | não usar a GPU |
 | `--idioma en` | reuniões noutra língua |
@@ -229,8 +231,8 @@ Objetivo da reunião, resultado principal e o que vem a seguir, em 3 a 5 frases.
 | `--sem-oradores` | não identificar quem fala |
 | `--saida <pasta>` | guardar as reuniões noutra pasta |
 
-As opções podem vir antes ou depois do comando (`reuniao --cpu gravar` ou
-`reuniao gravar --cpu`). Os valores por defeito estão no topo de `reuniao.py`.
+As opções podem vir antes ou depois do comando (`bee-memo --cpu gravar` ou
+`bee-memo gravar --cpu`). Os valores por defeito estão no topo de `bee_memo.py`.
 
 ## Reuniões online
 
@@ -291,21 +293,21 @@ Limites:
 
 ## Problemas comuns
 
-- **"GPU indisponível… A usar CPU"**: corra sempre pelo atalho `reuniao`, porque é ele que
+- **"GPU indisponível… A usar CPU"**: corra sempre pelo atalho `bee-memo`, porque é ele que
   configura as bibliotecas CUDA. Confirme também que `nvidia-smi` funciona. Se o erro for
   *out of memory*, outro programa está a ocupar a VRAM; veja com `nvidia-smi`.
-- **"O Ollama não está a correr"**: o atalho `reuniao` arranca o contentor sozinho; se falhar,
-  corra `docker compose up -d` na pasta do projeto e veja `docker logs reuniao-ollama`.
+- **"O Ollama não está a correr"**: o atalho `bee-memo` arranca o contentor sozinho; se falhar,
+  corra `docker compose up -d` na pasta do projeto e veja `docker logs bee-memo-ollama`.
 - **Resumo muito lento**: o Ollama pode estar sem GPU. Confirme com
-  `docker exec reuniao-ollama nvidia-smi` e que o `.env` inclui `docker-compose.gpu.yml`.
+  `docker exec bee-memo-ollama nvidia-smi` e que o `.env` inclui `docker-compose.gpu.yml`.
 - **A janela não abre**: confirme que o GTK para Python está instalado
   (`sudo apt install python3-gi gir1.2-gtk-3.0`).
 - **A gravação fica em silêncio**: escolha outro microfone (na janela, ou com
-  `reuniao microfones` e `--dispositivo`) e verifique o volume de entrada nas definições de som.
+  `bee-memo microfones` e `--dispositivo`) e verifique o volume de entrada nas definições de som.
 - **"Não foi possível ler o áudio"**: o ficheiro não é um áudio válido ou está corrompido.
 - **Pessoas a mais ou a menos na transcrição**: indique o número de pessoas (`--pessoas N`
   ou o campo na janela). Para ajustar o modo automático, mude `LIMIAR_ORADORES` no topo de
-  `reuniao.py` (mais baixo separa mais vozes).
+  `bee_memo.py` (mais baixo separa mais vozes).
 - **"Não foi possível descarregar" os modelos de oradores**: a primeira identificação de
   oradores precisa de internet. Sem ela, desligue-a com `--sem-oradores`.
 - **Aviso sobre `HF_TOKEN`**: é só um aviso do Hugging Face ao verificar o modelo Whisper; pode
@@ -317,10 +319,10 @@ Limites:
 
 | Ficheiro | Para quê |
 |----------|----------|
-| `reuniao.py` | gravação, conversão, transcrição, resumo e linha de comandos |
-| `interface.py` | janela GTK; lança o `reuniao.py` e mostra o resultado |
-| `reuniao` | atalho que prepara as bibliotecas CUDA, arranca o Ollama e chama o `reuniao.py` (gerado pelo instalador) |
-| `reuniao.desktop` | modelo do atalho no menu de aplicações |
+| `bee_memo.py` | gravação, conversão, transcrição, resumo e linha de comandos |
+| `interface.py` | janela GTK; lança o `bee_memo.py` e mostra o resultado |
+| `bee-memo` | atalho que prepara as bibliotecas CUDA, arranca o Ollama e chama o `bee_memo.py` (gerado pelo instalador) |
+| `net.beecoders.BeeMemo.desktop` | modelo do atalho no menu de aplicações |
 | `instalar.sh` | instalação completa |
 | `docker-compose.yml`, `docker-compose.gpu.yml` | contentor do Ollama, com e sem GPU |
 
